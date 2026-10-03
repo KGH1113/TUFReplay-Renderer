@@ -52,12 +52,15 @@ public sealed class ReplayManifest
   [JsonProperty("judgmentSystem", Required = Required.Always)] public string JudgmentSystem { get; set; }
   [JsonProperty("judgmentDifficulty")] public string JudgmentDifficulty { get; set; }
   [JsonProperty("startTile")] public int StartTile { get; set; }
+  [JsonProperty("result")] public string Result { get; set; }
   [JsonProperty("wonTimeUs")] public long? WonTimeUs { get; set; }
   [JsonProperty("terminalTimeUs", Required = Required.Always)] public long TerminalTimeUs { get; set; }
 
   public void Validate()
   {
-    if (StartTile != 0) throw new RecordingFormatException("render_start_tile_unsupported", "Rendering currently supports recordings that start at tile zero. Record a full run from the beginning and render again.", "startTile");
+    if (StartTile < 0) throw new RecordingFormatException("render_start_tile_invalid", "The recording has a negative start tile. Record a new run before rendering.", "startTile");
+    if (Result != null && Result != "cleared" && Result != "failed" && Result != "aborted") throw Invalid("result");
+    if (Result == "failed" && WonTimeUs.HasValue) throw Invalid("result");
     if (!IsFinite(GameplayStartSongPosition)) throw Invalid("gameplayStartSongPosition");
     if (!IsFinite(EffectivePitch) || EffectivePitch <= 0) throw Invalid("effectivePitch");
     if (!IsFinite(GameInputOffsetMs)) throw Invalid("gameInputOffsetMs");

@@ -52,7 +52,8 @@ namespace OrbitRender.Patches
             var effectsField = AccessTools.Field(typeof(scrFloor), "plusEffects");
             var startEffect = AccessTools.Method(typeof(ffxPlaySound), "StartEffect", Type.EmptyTypes);
             var ready = AccessTools.Method(typeof(ffxPlaySound), "get_ready");
-            if (effectsField == null || startEffect == null || ready == null)
+            var triggered = AccessTools.Field(typeof(ffxPlaySound), "triggered");
+            if (effectsField == null || startEffect == null || ready == null || triggered == null)
                 throw new MissingMethodException("ADOFAI Play Sound Effect scheduling API changed.");
 
             var scheduled = 0;
@@ -66,6 +67,7 @@ namespace OrbitRender.Patches
                 {
                     var playSound = effect as ffxPlaySound;
                     if (playSound == null) continue;
+                    if ((bool)triggered.GetValue(playSound)) continue;
                     if (!(bool)ready.Invoke(playSound, null))
                     {
                         skipped++;

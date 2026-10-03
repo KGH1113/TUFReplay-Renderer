@@ -13,6 +13,7 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
 {
   private readonly RecordingBundle bundle;
   private readonly ReplayEventCursor cursor;
+  private readonly double endDelaySeconds;
   private readonly Dictionary<string, KeyCode> keyCodes = new(StringComparer.Ordinal);
   private readonly Dictionary<string, HitMargin> margins = new(StringComparer.Ordinal);
   private readonly HashSet<KeyCode> heldKeys = new();
@@ -24,17 +25,23 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
   private bool begun;
   private bool ended;
   private bool won;
+  private bool terminalReached;
+  private bool deathAnimationCompleted;
+  private long? deathStartedVideoTimeUs;
   private RecordedHitEvent? activeHit;
   private long currentVideoTimeUs;
   private static readonly FieldInfo RawSongPosition = AccessTools.Field(typeof(scrConductor), "_songposition_minusi");
   private static readonly FieldInfo FreeroamUpTime = AccessTools.Field(typeof(scrController), "freeroamUpTime");
 
-  public RecordedReplayDriver(RecordingBundle bundle, double gameplayRate = 1)
+  public RecordedReplayDriver(RecordingBundle bundle, double gameplayRate = 1, double endDelaySeconds = 2)
   {
     this.bundle = bundle ?? throw new ArgumentNullException(nameof(bundle));
     if (double.IsNaN(gameplayRate) || double.IsInfinity(gameplayRate) || gameplayRate <= 0)
       throw new ArgumentOutOfRangeException(nameof(gameplayRate));
     PlaybackRateMultiplier = gameplayRate;
+    if (double.IsNaN(endDelaySeconds) || double.IsInfinity(endDelaySeconds) || endDelaySeconds < 0 || endDelaySeconds > 30)
+      throw new ArgumentOutOfRangeException(nameof(endDelaySeconds));
+    this.endDelaySeconds = endDelaySeconds;
     GameplayRate = bundle.Manifest.Replay.EffectivePitch * gameplayRate;
     cursor = new ReplayEventCursor(bundle.Inputs, bundle.Hits);
     foreach (RecordedKeyEvent input in bundle.Inputs)
@@ -62,6 +69,13 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
   public long CurrentVideoTimeUs => currentVideoTimeUs;
   public long CurrentInputSequence { get; private set; } = -1;
   public bool ApplyingRecordedHit => activeHit.HasValue;
+  internal bool ApplyingTerminalDeath { get; private set; }
+  internal void DeathStarted()
+  {
+    if (ADOBase.controller?.playerOne?.alive == false && !deathStartedVideoTimeUs.HasValue)
+      deathStartedVideoTimeUs = currentVideoTimeUs;
+  }
+  internal void DeathAnimationCompleted() => deathAnimationCompleted = true;
   internal bool ApplyingInputEvent { get; private set; }
   internal bool ApplyingFreeroam { get; private set; }
   internal RecordedHitEvent? ActiveHit => activeHit;
@@ -138,7 +152,7 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     if (controller == null || conductor == null) throw new InvalidOperationException("The game left the recorded level while rendering.");
     if (!GameplayStartVideoTimeUs.HasValue)
     {
-      if (controller.state != States.PlayerControl || controller.currentSeqID != 0) {
+      if (controller.state != States.PlayerControl) {
         CurrentReplayTimeUs = checked((long)Math.Floor(timeline.OutputToReplay(currentVideoTimeUs)));
         cursor.AdvanceInputsTo(CurrentReplayTimeUs, ApplyInput);
         overlays?.AfterFrame(frame.DeltaTime);
@@ -147,7 +161,11 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
       double recordingUs = (conductor.songposition_minusi - bundle.Manifest.Replay.GameplayStartSongPosition) * 1_000_000d;
       GameplayStartVideoTimeUs = checked(currentVideoTimeUs - (long)Math.Round(recordingUs / GameplayRate));
       timeline = new RenderTimeline(GameplayStartVideoTimeUs.Value, GameplayRate, bundle.Manifest.Replay.WonTimeUs);
-      context.SetEndTime((ReplayToVideoTimeUs(bundle.Manifest.Replay.TerminalTimeUs) + 1_000_000d / context.VideoFps) / 1_000_000d);
+      // Leave room for the native death callback; its actual completion below
+      // sets the final end time. A missing callback must fail instead of cutting
+      // away the death animation or silently rendering indefinitely.
+      context.SetEndTime(ReplayToVideoTimeUs(bundle.Manifest.Replay.TerminalTimeUs) / 1_000_000d
+        + endDelaySeconds + (bundle.Manifest.Replay.Result == "failed" ? 10 : 0) + 1d / context.VideoFps);
     }
     long elapsedVideoUs = currentVideoTimeUs - GameplayStartVideoTimeUs.Value;
     long timeUs = VideoElapsedToReplayTime(elapsedVideoUs);
@@ -171,8 +189,28 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     overlays?.AfterFrame(frame.DeltaTime);
     if (timeUs >= bundle.Manifest.Replay.TerminalTimeUs)
     {
-      if (!cursor.AllHitsConsumed) throw new InvalidOperationException("The render ended before all recorded judgments were applied.");
-      context.RequestStop();
+      if (!terminalReached)
+      {
+        if (!cursor.AllHitsConsumed) throw new InvalidOperationException("The render ended before all recorded judgments were applied.");
+        terminalReached = true;
+        if (bundle.Manifest.Replay.Result == "failed" && controller.playerOne.alive)
+        {
+          // Missed/late inputs need not have an accepted Hit row. The recorded
+          // outcome is authoritative, including failures on safe/no-fail tiles.
+          ApplyingTerminalDeath = true;
+          try
+          {
+            using (SongPositionScope(bundle.Manifest.Replay.TerminalTimeUs))
+              controller.playerOne.Die(hitbox: true);
+          }
+          finally { ApplyingTerminalDeath = false; }
+          DeathStarted();
+        }
+      }
+      if (bundle.Manifest.Replay.Result != "failed" || deathAnimationCompleted)
+        context.RequestStop(endDelaySeconds);
+      else if (!deathStartedVideoTimeUs.HasValue || currentVideoTimeUs - deathStartedVideoTimeUs.Value > 5_000_000)
+        throw new InvalidOperationException("The game's death animation did not finish. Check the installed gameplay mods and try rendering again.");
     }
   }
 

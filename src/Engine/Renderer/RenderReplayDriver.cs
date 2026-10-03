@@ -29,7 +29,7 @@ namespace OrbitRender.Renderer
         }
     }
 
-    /// <summary>All times are seconds from video frame zero, including countdown and clear tail.</summary>
+    /// <summary>All times are seconds from video frame zero, including countdown and ending animations.</summary>
     public sealed class RenderReplayContext
     {
         private readonly Func<bool> cancellationRequested;
@@ -60,7 +60,7 @@ namespace OrbitRender.Renderer
             EndTimeSeconds = videoSeconds;
         }
 
-        /// <summary>Includes the current frame, then keeps simulating the requested clear tail.</summary>
+        /// <summary>Includes the current frame, then keeps simulating the requested ending delay.</summary>
         public void RequestStop(double tailSeconds = 0)
         {
             if (double.IsNaN(tailSeconds) || double.IsInfinity(tailSeconds) || tailSeconds < 0)

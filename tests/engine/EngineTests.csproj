@@ -5,6 +5,7 @@
     <Compile Include="../../src/Engine/VideoCodec.cs" />
     <Compile Include="../../src/Engine/EncoderQualityOptions.cs" />
     <Compile Include="../../src/Engine/Renderer/RenderClock.cs" />
+    <Compile Include="../../src/Engine/Renderer/CheckpointAudioSchedule.cs" />
     <Compile Include="../../src/Engine/Renderer/RenderReplayDriver.cs" />
     <Compile Include="../../src/Engine/Renderer/RenderReservationGate.cs" />
     <Compile Include="../../src/Engine/Renderer/RenderCanvasSelection.cs" />

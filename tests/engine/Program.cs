@@ -10,6 +10,22 @@ using OrbitRender.Renderer;
 internal static class Program
 {
     static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
+    static void TestCheckpointAudio()
+    {
+        foreach (double pitch in new[] { 0.5, 1.0, 2.5 })
+        {
+            var schedule = CheckpointAudioSchedule.Create(1234, 100, pitch, 0.25, 2);
+            Assert(Math.Abs(schedule.SourceTimeSeconds - 98.25) < 1e-9, "Checkpoint song seek lost the authored offset/countdown.");
+            Assert(Math.Abs(schedule.SourceStartDsp - 1234.1) < 1e-9, "Checkpoint did not retain native audio lead-in.");
+            double chartAtStart = (schedule.SourceStartDsp - schedule.ConductorStartDsp) * pitch - 0.25;
+            Assert(Math.Abs(chartAtStart - 100) < 1e-9, "Checkpoint audio and chart clocks disagree at non-unit pitch.");
+        }
+        var negative = CheckpointAudioSchedule.Create(1000, 2, 2, -5, 2);
+        Assert(negative.SourceTimeSeconds == 0 && Math.Abs(negative.SourceStartDsp - 1002.6) < 1e-9,
+            "Negative checkpoint seek must become silence before the first song sample.");
+        Assert(Math.Abs((negative.SourceStartDsp - negative.ConductorStartDsp) * 2 + 5 - 7) < 1e-9,
+            "Delaying a negative seek shifted the chart clock.");
+    }
     static int Main(string[] args)
     {
         try
@@ -33,6 +49,7 @@ internal static class Program
             Assert(VideoCodecCatalog.Get(VideoCodec.VP9).ResolveEncoder(VideoEncoder.IntelQsv, false, true, false) == "libvpx-vp9", "VP9 software fallback failed.");
             TestProResMappings();
             TestReplayDriverLifecycle();
+            TestCheckpointAudio();
             TestReplayRenderReservation();
             TestPresentationCanvasSelection();
             Assert(RenderFailureCodes.FromException(new IOException("No space left on device")) == "render_storage_full", "Engine storage failure code was lost.");

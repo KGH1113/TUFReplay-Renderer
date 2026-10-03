@@ -19,8 +19,12 @@ internal static class ReplayHooks
     {
       foreach (var target in SuppressedMethods()) Patch(target, nameof(Suppress));
       Patch(AccessTools.Method(typeof(scrPlayer), nameof(scrPlayer.Hit)), nameof(AllowRecordedHit));
-      Patch(AccessTools.Method(typeof(scrPlayer), nameof(scrPlayer.Die)), nameof(AllowRecordedHit));
-      Patch(AccessTools.Method(typeof(scrPlanet), nameof(scrPlanet.MarkFail)), nameof(AllowRecordedHit));
+      Harmony.Patch(AccessTools.Method(typeof(scrPlayer), nameof(scrPlayer.Die)),
+        prefix: new HarmonyMethod(typeof(ReplayHooks), nameof(AllowRecordedFailure)) { priority = Priority.First },
+        postfix: new HarmonyMethod(typeof(ReplayHooks), nameof(DeathStarted)));
+      Patch(AccessTools.Method(typeof(scrPlanet), nameof(scrPlanet.MarkFail)), nameof(AllowRecordedFailure));
+      Harmony.Patch(AccessTools.Method(typeof(scrController), nameof(scrController.Fail2Action)),
+        postfix: new HarmonyMethod(typeof(ReplayHooks), nameof(DeathAnimationCompleted)));
       Patch(AccessTools.Method(typeof(scrPlanet), nameof(scrPlanet.SwitchChosen)), nameof(RestoreCachedAngle));
       Patch(AccessTools.Method(typeof(scrMisc), nameof(scrMisc.GetHitMarginInDeg)), nameof(RecordedMargin));
       Patch(AccessTools.Method(typeof(scrMisc), nameof(scrMisc.GetHitMarginInSec)), nameof(RecordedMargin));
@@ -48,6 +52,7 @@ internal static class ReplayHooks
     yield return AccessTools.Method(typeof(scrController), nameof(scrController.UpdateInput));
     yield return AccessTools.Method(typeof(scrController), nameof(scrController.PortalTravelAction));
     yield return AccessTools.Method(typeof(scrController), nameof(scrController.SaveProgress));
+    yield return AccessTools.Method(typeof(scrController), "Fail2_Update");
     yield return AccessTools.Method(typeof(scrPlayer), nameof(scrPlayer.Simulated_PlayerControl_Update));
     yield return AccessTools.Method(typeof(scrPlanet), "AsyncRefreshAngles");
     yield return AccessTools.Method(typeof(scrMistakesManager), "SaveCheckpointProgress");
@@ -68,6 +73,9 @@ internal static class ReplayHooks
 
   private static bool Suppress() => Current == null;
   private static bool AllowRecordedHit() => Current == null || Current.ApplyingRecordedHit;
+  private static bool AllowRecordedFailure() => Current == null || Current.ApplyingRecordedHit || Current.ApplyingTerminalDeath;
+  private static void DeathStarted() => Current?.DeathStarted();
+  private static void DeathAnimationCompleted() => Current?.DeathAnimationCompleted();
   private static bool AllowFreeroam() => Current == null || Current.ApplyingFreeroam;
   private static void PrepareMusic() => Current?.ApplyPreparedSettings();
   private static void RestoreCachedAngle(scrPlanet __instance)

@@ -106,8 +106,26 @@ internal static class ParserTests
       ExactError(() => RecordingBundle.Load(path), "render_metadata_invalid", null, null);
       File.WriteAllText(path, JsonConvert.SerializeObject(manifest));
       manifest.Replay.StartTile = 10;
-      Reject(() => manifest.Validate());
+      manifest.Validate();
+      manifest.Replay.Result = "failed";
+      manifest.Replay.WonTimeUs = null;
+      File.WriteAllText(Path.Combine(directory, "hits.csv"), RecordingCsvReader.HitsHeader + "\n0,10,1,0.5,0,0,0,1,1,0,0,0,XPerfect\n");
+      File.WriteAllText(path, JsonConvert.SerializeObject(manifest));
+      var checkpoint = RecordingBundle.Load(path);
+      Assert(checkpoint.Manifest.Replay.StartTile == 10 && checkpoint.Hits[0].FloorId == 10, "checkpoint recording loads");
+      Assert(checkpoint.Manifest.Replay.Result == "failed", "death outcome survives export");
+      File.WriteAllText(Path.Combine(directory, "hits.csv"), RecordingCsvReader.HitsHeader + "\n");
+      Assert(RecordingBundle.Load(path).Hits.Length == 0, "failed run without an accepted hit loads");
+      File.WriteAllText(Path.Combine(directory, "hits.csv"), RecordingCsvReader.HitsHeader + "\n0,0,1,0.5,0,0,0,1,1,0,0,0,XPerfect\n");
+      manifest.Replay.StartTile = -1;
+      ExactError(() => manifest.Validate(), "render_start_tile_invalid", "startTile", null);
       manifest.Replay.StartTile = 0;
+      manifest.Replay.Result = "unexpected";
+      ExactError(() => manifest.Validate(), "render_metadata_field_invalid", "result", null);
+      manifest.Replay.Result = "failed";
+      manifest.Replay.WonTimeUs = 5;
+      ExactError(() => manifest.Validate(), "render_metadata_field_invalid", "result", null);
+      manifest.Replay.Result = null; // Older bundles remain readable.
       Reject(() => bundle.ResolveFile("../outside.csv"));
       Reject(() => bundle.ResolveFile(path));
       string level = Path.Combine(directory, "level.adofai");

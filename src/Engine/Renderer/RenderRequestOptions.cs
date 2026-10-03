@@ -38,6 +38,8 @@ namespace OrbitRender.Renderer
         public int? SelectionEndTile;
 
         public IRenderReplayDriver ReplayDriver;
+        // Recorded checkpoints use the game's native rewind/scrub preparation.
+        public int ReplayStartTile;
         // Acquire before changing game state; hold through the caller's final restoration.
         public IDisposable ReplayRenderReservation;
         // Evaluated after driver.Begin, when reset/recreated mod canvases are ready.

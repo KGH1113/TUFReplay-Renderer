@@ -52,6 +52,7 @@ namespace OrbitRender.Renderer
         public static bool ReplayRenderActive => Instance != null && Instance.replayDriverForRun != null && Instance.Busy;
         internal static double InputCalibrationSeconds => ReplayRenderActive ? scrConductor.calibration_i : 0.0;
         private IRenderReplayDriver replayDriverForRun;
+        private int replayStartTileForRun;
         private Func<System.Collections.Generic.IEnumerable<Canvas>> captureCanvasesForRun;
         private Func<System.Collections.Generic.IEnumerable<Canvas>> presentationCanvasesForRun;
         private RenderReplaySession replaySession;
@@ -213,6 +214,8 @@ namespace OrbitRender.Renderer
             outputDirectoryForRun = requestOptions?.OutputDirectory;
             customOutputPathForRun = requestOptions?.CustomOutputPath;
             replayDriverForRun = requestOptions?.ReplayDriver;
+            replayStartTileForRun = replayDriverForRun != null ? requestOptions.ReplayStartTile : 0;
+            if (replayStartTileForRun < 0) throw new ArgumentOutOfRangeException(nameof(requestOptions.ReplayStartTile));
             captureCanvasesForRun = requestOptions?.CaptureCanvases;
             presentationCanvasesForRun = requestOptions?.PresentationCanvases;
             replaySession = null;
@@ -450,7 +453,7 @@ namespace OrbitRender.Renderer
             // it must not mute the simulation that drives the visuals.
             AudioListener.pause = false;
             Persistence.skipIntroBehavior = SkipIntroBehavior.Off;
-            GCS.checkpointNum = 0;
+            GCS.checkpointNum = replayStartTileForRun;
             RDC.auto = false; // Preserve the normal countdown, avoiding the editor's fast-takeoff shortcut.
             // ADOFAI's hit-text manager exits early when noHud is enabled.
             // Keep the normal HUD-hidden render path, but allow the explicit
@@ -470,18 +473,18 @@ namespace OrbitRender.Renderer
             yield return PrepareCustomSoundEffects();
             if (editor != null)
             {
-                // Always pre-roll from tile zero. Mid-level checkpoint scrubbing
-                // does not reconstruct every camera tween, flash, shader and
-                // audio event on complex levels. Selection mode still captures
-                // no video frames before its first selected tile.
-                editor.SelectFloor(editor.floors[0], cameraJump: false);
+                // Editor selections pre-roll from zero. Recorded checkpoints
+                // instead restore the same native state as their original run.
+                if (replayStartTileForRun >= editor.floors.Count)
+                    throw new InvalidOperationException("The recorded start tile is outside the loaded level.");
+                editor.SelectFloor(editor.floors[replayStartTileForRun], cameraJump: false);
                 editor.Play();
                 editorStateReady = false;
             }
             else
             {
                 level.ResetScene();
-                if (!level.Play(0)) throw new InvalidOperationException("Custom Level playback could not start.");
+                if (!level.Play(replayStartTileForRun)) throw new InvalidOperationException("Custom Level playback could not start.");
                 // The official preparation coroutine warms filters over two frames.
                 int preparationFrames = 0;
                 while (level.isLoading)
@@ -491,8 +494,8 @@ namespace OrbitRender.Renderer
                 }
                 AbortStartPrompt();
                 ADOBase.conductor.Start();
-                level.FinishCustomLevelLoading(0);
-                ADOBase.controller.Start_Rewind(0);
+                level.FinishCustomLevelLoading(replayStartTileForRun);
+                ADOBase.controller.Start_Rewind(replayStartTileForRun);
             }
             // editor.Play() leaves one frame of camera setup pending. Let that
             // setup run before taking ownership of the gameplay cameras, then
@@ -965,11 +968,40 @@ namespace OrbitRender.Renderer
             {
                 Main.Entry.Logger.Log("Game audio capture started: "
                     + audio.SampleRate + " Hz, " + audio.Channels + " channels.");
-                AudioSchedulePatch.PreSchedulePlaySoundEffects();
             }
+        }
+        internal void ScrubAudio(scrConductor conductor, double songTime)
+        {
+            // Native checkpoint preparation calls this before reconstructing
+            // effects. Keep every song stem and the conductor on the offline DSP
+            // clock, including offsets that put the first sample after takeoff.
+            var schedule = CheckpointAudioSchedule.Create(Clock.DspTime, songTime,
+                conductor.song.pitch, conductor.addoffset,
+                conductor.separateCountdownTime ? conductor.crotchetAtStart * conductor.countdownTicks : 0);
+            AudioManager.Instance.StopAllSounds();
+            conductor.dspTime = Clock.DspTime;
+            conductor.dspTimeSong = schedule.ConductorStartDsp;
+            scheduledMusicStartDsp = schedule.SourceStartDsp;
+            scheduledMusicLengthSeconds = Math.Max(0, LongestClipLength(conductor, conductor.song.pitch)
+                - schedule.SourceTimeSeconds / conductor.song.pitch);
+            foreach (var source in new[] { conductor.song, conductor.song2, conductor.song3 })
+            {
+                if (source == null || source.clip == null) continue;
+                source.Stop();
+                if (schedule.SourceTimeSeconds >= source.clip.length) continue;
+                source.time = (float)schedule.SourceTimeSeconds;
+                source.PlayScheduled(schedule.SourceStartDsp);
+            }
+            foreach (var player in ADOBase.playerManager) player.lastHit = songTime;
+            // Checkpoint_Enter reads this before the next conductor Update.
+            conductor.songposition_minusi = Clock.SongPosition(conductor.dspTimeSong,
+                conductor.song.pitch, conductor.addoffset, InputCalibrationSeconds);
         }
         internal void MusicScheduled()
         {
+            // Native checkpoint Scrub stops all custom sounds and rebuilds their
+            // triggered state. Schedule future sounds only after that pass.
+            if (audio != null) AudioSchedulePatch.PreSchedulePlaySoundEffects();
             var conductor = ADOBase.conductor;
             double pitch = conductor.song.pitch;
             if (pitch <= 0 || double.IsNaN(pitch) || double.IsInfinity(pitch))

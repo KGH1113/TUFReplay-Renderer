@@ -12,7 +12,7 @@ The web Render action exports a recording, renders its recorded judgments throug
 2. Keep the original level, its assets and required gameplay mods installed. Open the companion web page and choose **Render** from the recorded run's **⋯** menu.
 3. Choose the codec, encoder, quality, video size, frame rates, audio, visible game elements, recorded media and local output folder in the web dialog. The default is 1080p60 with the original recorded pitch. Configure an installed FFmpeg executable if it is not detected. Cancel is available while preparing, rendering or compositing. After completion, **Open save location** opens the selected folder. The game shows only progress, optional preview and cancel through packaged Unity UI assets with TextMeshPro SDF text.
 
-The first version supports complete runs starting at tile 0. Checkpoint runs are rejected before rendering. Old recordings without the required timing or judgment fields need a new recording.
+Runs can start at tile 0 or at a recorded checkpoint/mid-level tile. The renderer uses the game's native checkpoint preparation to restore the starting floor, effects and song position. Failed runs include the game's death animation. **Wait after clear or death** in the web dialog controls the extra 0–30 seconds after the run ends; for failures it starts after the death animation callback, so zero still includes the explosion. Old recordings without the required timing or judgment fields need a new recording.
 
 Recording bundles are portable data contracts; their `level.path` may point to the user's local original level. The renderer checks the supplied file hash before loading. Neither game assets nor recording media are committed or packaged.
 

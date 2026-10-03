@@ -238,7 +238,10 @@ public sealed class RenderJobController : MonoBehaviour
             if (Time.realtimeSinceStartupAsDouble > loadDeadline) throw new RenderOperationException("level_load_timeout", "The recorded level did not finish loading within two minutes. Check that it opens in the editor and try again.");
         }
         EnsureReservedRenderer();
-        activeDriver = new RecordedReplayDriver(bundle);
+        int startTile = bundle.Manifest.Replay.StartTile;
+        if (startTile >= editor.floors.Count || editor.floors[startTile] == null || editor.floors[startTile].seqID != startTile)
+            throw new RecordingFormatException("render_start_tile_out_of_range", "The recorded start tile is outside this level. Restore the original level file and try again.", "startTile");
+        activeDriver = new RecordedReplayDriver(bundle, endDelaySeconds: options.EndDelaySeconds);
         activeDriver.CompatibilityWarning += message => job.Warnings.Enqueue(message);
         optionalClock = OptionalModClock.Begin(message => job.Warnings.Enqueue(message));
         activeDriver.PrepareBeforeRender();
@@ -247,6 +250,7 @@ public sealed class RenderJobController : MonoBehaviour
         requestOptions.CustomOutputPath = job.RawGameOutput;
         requestOptions.OutputDirectory = job.WorkDirectory;
         requestOptions.ReplayDriver = activeDriver; requestOptions.CaptureCanvases = CaptureOverlays;
+        requestOptions.ReplayStartTile = startTile;
         requestOptions.PresentationCanvases = () => Main.ProgressUi.PresentationCanvases();
         requestOptions.ReplayRenderReservation = replayRenderReservation;
         activeRenderer.StartRender(requestOptions);

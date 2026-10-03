@@ -18,6 +18,7 @@ This is the neutral interchange format between a recorder and TUFReplay-Renderer
     "judgmentSystem": "ModernClassic",
     "judgmentDifficulty": "Normal",
     "startTile": 0,
+    "result": "cleared",
     "wonTimeUs": 6000000,
     "terminalTimeUs": 6500000
   },
@@ -27,7 +28,7 @@ This is the neutral interchange format between a recorder and TUFReplay-Renderer
 }
 ```
 
-`judgmentDifficulty`, `startTile`, `fileSha256`, `wonTimeUs` and `media` are optional; the other illustrated scalar fields are required. `wonTimeUs` is nullable. Version 1 supports full runs starting at tile zero; omitted `startTile` defaults to zero and a nonzero start is rejected before opening the level. A provided level SHA-256 is checked using a stream before the level is opened. Restoring the original `.adofai` file does not establish the identity of external assets or custom mods; those still need to match the recording.
+`judgmentDifficulty`, `startTile`, `result`, `fileSha256`, `wonTimeUs` and `media` are optional; the other illustrated scalar fields are required. `wonTimeUs` is nullable. Omitted `startTile` defaults to zero; non-negative mid-level starts use the game's native checkpoint rewind, scrub and lead-in. The start tile must exist in the loaded level. `result` is `cleared`, `failed` or `aborted`. New exports include it so a failure without an accepted hit (for example a late miss) still triggers native death. Older bundles without it retain their accepted-hit behavior; re-export the saved run to supply the outcome. A provided level SHA-256 is checked using a stream before the level is opened. Restoring the original `.adofai` file does not establish the identity of external assets or custom mods; those still need to match the recording.
 
 The level path may be absolute, or relative to the manifest's folder. CSV/media paths are relative to that folder and cannot contain parent traversal or an absolute path. Bundles are local recorder-generated files; path validation is lexical and does not provide symlink isolation. UTF-8 CSV headers are exact, with an optional byte-order mark. Version 1 has unquoted comma-separated fields and invariant numeric formatting. Blank rows are ignored. Each event stream is limited to five million rows; manifests are limited to 1 MiB and individual CSV rows to 4096 characters.
 
@@ -35,7 +36,7 @@ The level path may be absolute, or relative to the manifest's folder. CSV/media 
 
 `timeUs` follows the recorded conductor's `songposition_minusi` relative to `gameplayStartSongPosition`, expressed in microseconds. Original pitch is already reflected in this value. Do not divide this timestamp by pitch during export or multiply it by pitch when writing an event's song position back to the game.
 
-Video time begins before gameplay and includes the game's countdown. At the final scheduled DSP anchor, the driver derives a provisional replay/video mapping from the conductor and advances only recorded inputs during countdown. It establishes the definitive `gameplayStartVideoTimeUs` when the rewound game enters tile zero. Accepted hits stay queued until gameplay begins. With original pitch `p` and requested playback multiplier `m`, gameplay rate is `r = p * m`. A replay timestamp maps to video time as:
+Video time begins before gameplay and includes the game's countdown or checkpoint lead-in. At the final scheduled DSP anchor, the driver derives a provisional replay/video mapping from the conductor and advances only recorded inputs during preparation. It establishes the definitive `gameplayStartVideoTimeUs` when the rewound game enters player control. Accepted hits stay queued until gameplay begins. Checkpoint music, all song stems and future custom sounds share the offline DSP anchor after native scrubbing. With original pitch `p` and requested playback multiplier `m`, gameplay rate is `r = p * m`. A replay timestamp maps to video time as:
 
 ```
 before clear: anchor + replayTimeUs / r
@@ -43,6 +44,8 @@ after clear:  anchor + wonTimeUs / r + replayTimeUs - wonTimeUs
 ```
 
 The clear tail advances at rate one. For pitch 1.5 and multiplier 1, replay time 3 seconds appears 2 seconds after gameplay begins. Replay time 6.5 seconds with a clear at 6 seconds appears 4.5 seconds after gameplay begins. Negative events are allowed for pre-game input. `terminalTimeUs` must be non-negative; a provided clear must lie between zero and terminal. Events after terminal are rejected.
+
+At terminal, the renderer adds the configured ending delay in output seconds, independent of pitch. For `failed` runs it invokes native death if an accepted hit has not already done so, waits for the game's death animation callback, then adds the delay. The callback includes the explosion even when the delay is zero. Input/retry and score persistence remain blocked until capture finishes. Cancellation remains available during the animation and wait.
 
 ## Inputs
 

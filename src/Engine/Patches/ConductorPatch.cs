@@ -123,6 +123,17 @@ namespace OrbitRender.Patches
         }
     }
 
+    [HarmonyPatch(typeof(scrConductor), "ScrubMusicToTime")]
+    internal static class CheckpointMusicPatch
+    {
+        static bool Prefix(scrConductor __instance, double newTime)
+        {
+            if (!RendererController.ControlsTime) return true;
+            RendererController.Instance.ScrubAudio(__instance, newTime);
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(scrConductor), "PlayHitTimes")]
     internal static class BgaHitSoundPatch
     {
