@@ -188,10 +188,18 @@ public sealed class RenderJobController : MonoBehaviour
         string[] videoEncoding = EmbeddedRenderEngine.GetVideoEncodingArguments(requestOptions);
         if (options.IncludeDmNote) {
             var note = settings.DmNote ?? new DmNoteSettings();
-            var beginning = dmNoteBeginning = Main.DmNote.BeginSessionAsync(Math.Min(width, note.Width), Math.Min(height, note.Height), note.ViewerKind, 0, job.Cancellation.Token);
+            var placement = new JObject {
+                ["automaticPlacement"] = note.AutomaticPlacement,
+                ["gameProcessId"] = System.Diagnostics.Process.GetCurrentProcess().Id,
+                ["gameViewportWidth"] = Screen.width, ["gameViewportHeight"] = Screen.height,
+                ["outputWidth"] = width, ["outputHeight"] = height
+            };
+            var beginning = dmNoteBeginning = Main.DmNote.BeginSessionAsync(Math.Min(width, note.Width), Math.Min(height, note.Height), note.ViewerKind, 0, job.Cancellation.Token, placement);
             backgroundWork = beginning;
             while (!beginning.IsCompleted) yield return null;
             dmNoteSession = beginning.GetAwaiter().GetResult();
+            if (note.AutomaticPlacement && dmNoteSession.Layout == null)
+                throw new RenderOperationException("dmnote_capture_failed", "This ImplDmNote app cannot match the live overlay position. Update ImplDmNote or disable automaticPlacement in renderer.settings.json.");
         }
         string levelPath = bundle.ResolveLevelPath();
         if (!File.Exists(levelPath)) throw new RenderOperationException("level_missing", "The recorded level file was moved or deleted. Restore the recorded file and export again.");

@@ -20,13 +20,21 @@ internal sealed class DmNoteRenderSession : IDisposable
     private int ended;
     public int Width { get; }
     public int Height { get; }
+    public JObject Layout { get; }
+    private readonly bool rgba;
 
     internal DmNoteRenderSession(DmNoteRenderBridge bridge, string id, JObject result)
     {
         this.bridge = bridge; this.id = id;
         Width = (int?)result["width"] ?? 0; Height = (int?)result["height"] ?? 0;
+        Layout = result["layout"] as JObject;
+        string format = (string)result["frameFormat"] ?? "png";
+        if (format != "png" && format != "rgba")
+            throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned an unsupported pixel format.");
+        rgba = format == "rgba";
         directory = (string)result["frameDirectory"];
-        if (Width <= 0 || Height <= 0 || string.IsNullOrWhiteSpace(directory) || !Path.IsPathRooted(directory))
+        if (Width <= 0 || Height <= 0 || Width > 8192 || Height > 8192 || (long)Width * Height * 4 > 128 * 1024 * 1024
+            || string.IsNullOrWhiteSpace(directory) || !Path.IsPathRooted(directory))
             throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned an invalid render surface.");
     }
 
@@ -46,9 +54,10 @@ internal sealed class DmNoteRenderSession : IDisposable
         using var process = new Process { StartInfo = new ProcessStartInfo {
             FileName = ffmpeg, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            Arguments = string.Join(" ", new[] { "-v", "error", "-f", "image2pipe", "-framerate", fps.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "-vcodec", "png", "-i", "pipe:0", "-an", "-vf", "scale=" + Width + ":" + Height,
-                "-c:v", "ffv1", "-level", "3", "-pix_fmt", "bgra", "-frames:v", frameCount.ToString(System.Globalization.CultureInfo.InvariantCulture), temporary }.Select(ExternalProcess.Quote))
+            Arguments = string.Join(" ", new[] { "-v", "error", "-f", rgba ? "rawvideo" : "image2pipe", "-framerate", fps.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+                .Concat(rgba ? new[] { "-pixel_format", "rgba", "-video_size", Width + "x" + Height } : new[] { "-vcodec", "png" })
+                .Concat(new[] { "-i", "pipe:0", "-an", "-vf", "scale=" + Width + ":" + Height,
+                "-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0", "-threads", "2", "-pix_fmt", "bgra", "-frames:v", frameCount.ToString(System.Globalization.CultureInfo.InvariantCulture), temporary }).Select(ExternalProcess.Quote))
         }};
         var errors = new StringBuilder();
         Task stderr = null, stdout = null;
@@ -83,11 +92,13 @@ internal sealed class DmNoteRenderSession : IDisposable
                 if ((long?)result["frameIndex"] != frame || (long?)result["outputTimeUs"] != outputUs)
                     throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote acknowledged the wrong render frame.");
                 string path = Path.GetFullPath((string)result["framePath"] ?? "");
-                string expected = Path.GetFullPath(Path.Combine(directory, "frame.png"));
+                string expected = Path.GetFullPath(Path.Combine(directory, rgba ? "frame.rgba" : "frame.png"));
                 if (!string.Equals(path, expected, StringComparison.OrdinalIgnoreCase))
                     throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned a frame outside its session directory.");
                 using (var png = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true)) {
                     if (png.Length <= 0 || png.Length > 128 * 1024 * 1024) throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned an invalid frame image.");
+                    if (rgba && png.Length != (long)Width * Height * 4)
+                        throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned a truncated raw frame.");
                     await png.CopyToAsync(process.StandardInput.BaseStream, 64 * 1024, cancellation).ConfigureAwait(false);
                     await process.StandardInput.BaseStream.FlushAsync(cancellation).ConfigureAwait(false);
                 }

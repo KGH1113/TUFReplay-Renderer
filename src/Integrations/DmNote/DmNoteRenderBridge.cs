@@ -117,7 +117,7 @@ internal sealed class DmNoteRenderBridge : IDisposable
     }
 
     public async Task<DmNoteRenderSession> BeginSessionAsync(int width, int height, string viewerKind,
-        long initialOutputTimeUs, CancellationToken cancellation)
+        long initialOutputTimeUs, CancellationToken cancellation, JObject placement = null)
     {
         string id;
         lock (sync) {
@@ -127,10 +127,13 @@ internal sealed class DmNoteRenderBridge : IDisposable
             sessionId = id = Guid.NewGuid().ToString("N");
         }
         try {
-            JObject result = await CommandAsync("begin", new JObject {
+            var request = new JObject {
                 ["sessionId"] = id, ["width"] = width, ["height"] = height,
-                ["viewerKind"] = viewerKind ?? "hand", ["initialOutputTimeUs"] = initialOutputTimeUs
-            }, cancellation).ConfigureAwait(false);
+                ["viewerKind"] = viewerKind ?? "hand", ["initialOutputTimeUs"] = initialOutputTimeUs,
+                ["frameFormat"] = "rgba"
+            };
+            if (placement != null) request.Merge(placement);
+            JObject result = await CommandAsync("begin", request, cancellation).ConfigureAwait(false);
             return new DmNoteRenderSession(this, id, result);
         }
         catch {

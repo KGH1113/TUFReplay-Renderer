@@ -37,6 +37,7 @@ public sealed class RendererSettings
 
 public sealed class DmNoteSettings
 {
+    public bool AutomaticPlacement { get; set; } = true;
     public string ViewerKind { get; set; } = "hand";
     public int Width { get; set; } = 640;
     public int Height { get; set; } = 240;

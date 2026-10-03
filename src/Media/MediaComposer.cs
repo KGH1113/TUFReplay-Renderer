@@ -40,7 +40,7 @@ internal static class MediaComposer
                     await session.ExportAlphaAsync(bundle, timeline, frameCount, fps, noteVideo, ffmpeg,
                         cancellation, frame => progress?.Invoke(.35 * Math.Min(1, frame / (double)frameCount))).ConfigureAwait(false);
                     var note = settings.DmNote ?? new DmNoteSettings();
-                    noteLayout = JObject.FromObject(new { left = note.Left, top = note.Top, scale = note.Scale });
+                    noteLayout = session.Layout ?? JObject.FromObject(new { left = note.Left, top = note.Top, scale = note.Scale });
                 }
                 cancellation.ThrowIfCancellationRequested();
                 if (cameraPath == null && microphonePath == null && noteVideo == null) {

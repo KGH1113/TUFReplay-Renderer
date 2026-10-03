@@ -11,6 +11,7 @@
     "includeDmNote": true
   },
   "dmNote": {
+    "automaticPlacement": true,
     "viewerKind": "hand",
     "width": 640,
     "height": 240,
