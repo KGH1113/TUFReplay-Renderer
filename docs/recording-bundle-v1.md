@@ -1,6 +1,6 @@
 # Recording bundle, version 1
 
-This is the neutral interchange format between a recorder and TUFReplay-Renderer. The renderer references OrbitRender, game/Unity, UnityModManager, Newtonsoft.Json and AdofaiIpc. It does not reference a TUFReplay assembly or use TUFReplay's live transport.
+This is the neutral interchange format between a recorder and TUFReplay-Renderer. The renderer embeds OrbitRender engine source and references game/Unity, UnityModManager, Newtonsoft.Json and AdofaiIpc. It does not reference a TUFReplay assembly or use TUFReplay's live transport.
 
 ```json
 {
@@ -35,7 +35,7 @@ The level path may be absolute, or relative to the manifest's folder. CSV/media 
 
 `timeUs` follows the recorded conductor's `songposition_minusi` relative to `gameplayStartSongPosition`, expressed in microseconds. Original pitch is already reflected in this value. Do not divide this timestamp by pitch during export or multiply it by pitch when writing an event's song position back to the game.
 
-Video time begins before gameplay and includes the game's countdown. The driver establishes `gameplayStartVideoTimeUs` when the rewound game enters tile zero. With original pitch `p` and requested playback multiplier `m`, gameplay rate is `r = p * m`. A replay timestamp maps to video time as:
+Video time begins before gameplay and includes the game's countdown. At the final scheduled DSP anchor, the driver derives a provisional replay/video mapping from the conductor and advances only recorded inputs during countdown. It establishes the definitive `gameplayStartVideoTimeUs` when the rewound game enters tile zero. Accepted hits stay queued until gameplay begins. With original pitch `p` and requested playback multiplier `m`, gameplay rate is `r = p * m`. A replay timestamp maps to video time as:
 
 ```
 before clear: anchor + replayTimeUs / r
@@ -62,7 +62,9 @@ timeUs,key,down,sequence
 
 Unity names include `Return`, `LeftArrow`, `BackQuote`, `Backslash`, `Period`, `Alpha1`, `LeftCommand` and `KeypadEnter`. Recorder-internal names such as `Enter`, `ArrowLeft` and `Grave` must be normalized before export. `None`, undefined keys and numeric enum values are rejected by the game driver.
 
-Rows must be ordered by time; equal timestamps require strictly increasing sequences. Down/up transitions are preserved, including a complete short tap inside one output frame. Input events at the same timestamp as an accepted hit run first. The wire format does not preserve the original ordering between its two separate streams.
+Rows must be ordered by time; equal timestamps require strictly increasing sequences. Negative countdown timestamps are preserved without clamping. Down/up transitions are preserved, including a complete short tap inside one output frame. Input events at the same timestamp as an accepted hit run first. The wire format does not preserve the original ordering between its two separate streams.
+
+Validation failures carry a specific code with an affected field and CSV line when available. A missing replay origin or pitch is distinct from malformed JSON, a bad numeric CSV field, an unsupported key or judgment, backwards event times, or an event after the terminal timestamp. CSV lines include the header as line one. Required manifest fields are checked before deserialization defaults can conceal an omission. Signed countdown time is valid and does not trigger a missing timing/judgment error.
 
 ## Accepted hits
 

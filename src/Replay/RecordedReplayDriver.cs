@@ -41,14 +41,14 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     {
       if (keyCodes.ContainsKey(input.Key)) continue;
       if (!Enum.TryParse(input.Key, false, out KeyCode code) || !Enum.IsDefined(typeof(KeyCode), code) || code == KeyCode.None)
-        throw new RecordingFormatException($"The recording uses an unsupported key: {input.Key}.");
+        throw new RecordingFormatException("render_input_key_unsupported", $"The recording uses an unsupported key: {input.Key}.", "key");
       keyCodes.Add(input.Key, code);
     }
     foreach (RecordedHitEvent hit in bundle.Hits)
     {
       if (margins.ContainsKey(hit.Margin)) continue;
       if (!Enum.TryParse(hit.Margin, false, out HitMargin margin) || !Enum.IsDefined(typeof(HitMargin), margin))
-        throw new RecordingFormatException($"The recording uses an unsupported judgment: {hit.Margin}.");
+        throw new RecordingFormatException("render_hit_judgment_unsupported", $"The recording uses an unsupported judgment: {hit.Margin}.", "margin");
       margins.Add(hit.Margin, margin);
     }
   }
@@ -110,6 +110,11 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     if (!prepared) throw new InvalidOperationException("PrepareBeforeRender must run before Orbit schedules its audio.");
     context = renderContext ?? throw new ArgumentNullException(nameof(renderContext));
     begun = true;
+    // Orbit has already scheduled music and anchored conductor.songposition_minusi to frame zero.
+    double initialReplayUs = (ADOBase.conductor.songposition_minusi - bundle.Manifest.Replay.GameplayStartSongPosition) * 1_000_000d;
+    long initialOriginUs = checked(-(long)Math.Round(initialReplayUs / GameplayRate));
+    timeline = new RenderTimeline(initialOriginUs, GameplayRate, bundle.Manifest.Replay.WonTimeUs);
+    ReplayHitErrorMeter.Activate(this);
     overlays = new OptionalModReplaySupport(this, warning => CompatibilityWarning?.Invoke(warning));
     overlays.Begin();
     // Input-event effects deduplicate by the original game frame, which v1 does not store.
@@ -133,7 +138,12 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     if (controller == null || conductor == null) throw new InvalidOperationException("The game left the recorded level while rendering.");
     if (!GameplayStartVideoTimeUs.HasValue)
     {
-      if (controller.state != States.PlayerControl || controller.currentSeqID != 0) return;
+      if (controller.state != States.PlayerControl || controller.currentSeqID != 0) {
+        CurrentReplayTimeUs = checked((long)Math.Floor(timeline.OutputToReplay(currentVideoTimeUs)));
+        cursor.AdvanceInputsTo(CurrentReplayTimeUs, ApplyInput);
+        overlays?.AfterFrame(frame.DeltaTime);
+        return;
+      }
       double recordingUs = (conductor.songposition_minusi - bundle.Manifest.Replay.GameplayStartSongPosition) * 1_000_000d;
       GameplayStartVideoTimeUs = checked(currentVideoTimeUs - (long)Math.Round(recordingUs / GameplayRate));
       timeline = new RenderTimeline(GameplayStartVideoTimeUs.Value, GameplayRate, bundle.Manifest.Replay.WonTimeUs);
@@ -168,7 +178,7 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
 
   public long ReplayToVideoTimeUs(long replayTimeUs)
   {
-    if (!GameplayStartVideoTimeUs.HasValue) throw new InvalidOperationException("The render has not reached gameplay yet.");
+    if (timeline == null) throw new InvalidOperationException("The render timeline has not started yet.");
     return checked((long)Math.Round(timeline.ReplayToOutput(replayTimeUs)));
   }
 
@@ -276,7 +286,11 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     if (ended) return;
     ended = true;
     try { overlays?.Dispose(); }
-    finally { heldKeys.Clear(); ReplayHooks.Deactivate(this); }
+    finally {
+      heldKeys.Clear();
+      try { ReplayHitErrorMeter.Deactivate(this); }
+      finally { ReplayHooks.Deactivate(this); }
+    }
   }
 
   public void RestoreAfterRender()

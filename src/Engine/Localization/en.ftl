@@ -1,0 +1,17 @@
+preparing-render = Preparing {0}x{1} | target {2} fps | video {3} fps ({4} Mbps, {5})...
+checking-value-encoder = Checking {0} encoder...
+ffmpeg-could-not-initialize-the-selected-encoder = FFmpeg could not initialize the selected encoder.
+encoder-preflight-failed-value = Encoder preflight failed: {0}
+progress-percent = {0:F1}%
+progress-frames = {0} / {1} frames   •   {2:F1} fps
+progress-eta = ETA {0}   •   finishes around {1}
+progress-speed = {0:F2}x realtime   •   elapsed {1}
+progress-toast = Rendering  {0:F1}%  |  {1} / {2} frames  |  {3:F1} fps  |  ETA {4}
+render-cancelled = Render cancelled.
+rendering-summary = Rendering {0}x{1} | target {2} fps | video {3} fps
+finalizing-container = Finalizing {0}...
+completed-frames = Completed: {0} frames.
+audio-mix-was-silent-check-game-sound-settings =  Audio mix was silent; check game sound settings.
+render-failed-value = Render failed: {0}
+cleanup-failed-value = Cleanup failed: {0}
+render-reservation-required = Another replay render owns OrbitRender. Wait for it to finish or cancel it in the app that started it.

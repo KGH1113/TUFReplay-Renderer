@@ -1,14 +1,21 @@
 {
-  "NodePath": "node",
-  "DmNote": {
-    "AppPath": "/absolute/path/to/impl-resourcepack/apps/impl-dm-note",
-    "SnapshotPath": "/absolute/path/to/frozen-dmnote.json",
-    "ChromePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "ViewerKind": "hand",
-    "Width": 640,
-    "Height": 240,
-    "Left": 0.0,
-    "Top": 0.75,
-    "Scale": 1.0
+  "ffmpegExecutable": "/opt/homebrew/bin/ffmpeg",
+  "defaults": {
+    "outputDirectory": "/absolute/path/to/videos",
+    "videoCodec": "H264",
+    "encoder": "Software",
+    "width": 1920,
+    "height": 1080,
+    "videoFps": 60,
+    "simulationFps": 240,
+    "includeDmNote": true
+  },
+  "dmNote": {
+    "viewerKind": "hand",
+    "width": 640,
+    "height": 240,
+    "left": 0.0,
+    "top": 0.75,
+    "scale": 1.0
   }
 }

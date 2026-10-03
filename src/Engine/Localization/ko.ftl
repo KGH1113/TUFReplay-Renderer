@@ -1,0 +1,17 @@
+preparing-render = {0}x{1} | 게임 {2} fps | 영상 {3} fps 준비 중 ({4} Mbps, {5})...
+checking-value-encoder = {0} 인코더 확인 중...
+ffmpeg-could-not-initialize-the-selected-encoder = FFmpeg가 선택한 인코더를 초기화하지 못했습니다.
+encoder-preflight-failed-value = 인코더 사전 검사가 실패했습니다: {0}
+progress-percent = {0:F1}%
+progress-frames = {0} / {1} 프레임   •   {2:F1} fps
+progress-eta = 예상 시간 {0}   •   완료 예정 {1}
+progress-speed = 실시간 대비 {0:F2}배   •   경과 {1}
+progress-toast = 렌더링 중  {0:F1}%  |  {1} / {2} 프레임  |  {3:F1} fps  |  예상 {4}
+render-cancelled = 렌더를 취소했습니다.
+rendering-summary = {0}x{1} | 게임 {2} fps | 영상 {3} fps 렌더링 중
+finalizing-container = {0} 마무리 중...
+completed-frames = 완료: {0}프레임.
+audio-mix-was-silent-check-game-sound-settings =  오디오 믹스가 무음입니다. 게임 사운드 설정을 확인하세요.
+render-failed-value = 렌더 실패: {0}
+cleanup-failed-value = 정리 작업 실패: {0}
+render-reservation-required = 다른 리플레이 렌더링이 OrbitRender를 사용하고 있어요. 완료될 때까지 기다리거나 시작한 앱에서 취소해 주세요.

@@ -1,0 +1,350 @@
+using System;
+using System.IO;
+
+namespace OrbitRender
+{
+    public enum RendererPreset
+    {
+        Custom,
+        Preview,
+        FullHD,
+        QHD,
+        UHD4K
+    }
+
+    public enum EncoderSpeed
+    {
+        Maximum,
+        Balanced,
+        Quality
+    }
+
+    internal sealed class RenderProfile
+    {
+        public RenderProfile(int width, int height, int targetFps, int videoFps, int bitrateMbps, string ffmpegPreset,
+            float endDelaySeconds = 2f, string ffmpegCodec = "libx264", VideoCodec videoCodec = VideoCodec.H264,
+            VideoBitDepth bitDepth = VideoBitDepth.Eight, ProResProfile proResProfile = ProResProfile.HQ, int? crf = null, string pixelFormat = null)
+        {
+            Width = width;
+            Height = height;
+            TargetFps = targetFps;
+            VideoFps = videoFps;
+            BitrateMbps = bitrateMbps;
+            FfmpegPreset = ffmpegPreset;
+            EndDelaySeconds = endDelaySeconds;
+            FfmpegCodec = ffmpegCodec;
+            VideoCodec = VideoCodecCatalog.Normalize(videoCodec);
+            BitDepth = VideoCodecCatalog.Normalize(bitDepth);
+            ProResProfile = ProResProfiles.Normalize(proResProfile);
+            EncoderQualityOptions.ValidateCrf(VideoCodec, FfmpegCodec, crf);
+            Crf = crf;
+            PixelFormat = EncoderQualityOptions.ResolvePixelFormat(VideoCodec, FfmpegCodec, BitDepth, ProResProfile, pixelFormat);
+        }
+
+        public int Width { get; }
+        public int Height { get; }
+        public int TargetFps { get; }
+        public int VideoFps { get; }
+        public int BitrateMbps { get; }
+        public string FfmpegPreset { get; }
+        public float EndDelaySeconds { get; }
+        public string FfmpegCodec { get; }
+        public VideoCodec VideoCodec { get; }
+        public VideoBitDepth BitDepth { get; }
+        public ProResProfile ProResProfile { get; }
+        public string PixelFormat { get; }
+        public int? Crf { get; }
+        public string ContainerExtension => VideoCodecCatalog.Get(VideoCodec).ContainerExtension;
+        public string ContainerMimeType => VideoCodecCatalog.Get(VideoCodec).MimeType;
+        public string AudioEncoder => VideoCodecCatalog.Get(VideoCodec).AudioEncoder;
+        public string AudioBitrate => VideoCodecCatalog.Get(VideoCodec).AudioBitrate;
+    }
+
+    public sealed class RendererSettings
+    {
+        private const int MinWidth = 320;
+        private const int MaxWidth = 7680;
+        private const int MinHeight = 180;
+        private const int MaxHeight = 4320;
+        private const int MinFps = 15;
+        private const int MaxTargetFps = 1024;
+        private const int MaxVideoFps = 240;
+        private const int MinBitrate = 1;
+        private const int MaxBitrate = 200;
+        internal const float MinAudioGainDb = -60f;
+        internal const float MaxAudioGainDb = 12f;
+
+        public RendererPreset Preset = RendererPreset.FullHD;
+
+        public int Width = 1920;
+
+        public int Height = 1080;
+
+        // Do not pass Min/Max to UMM for a text field. UMM clamps each parsed
+        // keystroke, so typing a value such as 120 would turn the first "1"
+        // into 15 before the remaining digits can be entered.
+        public int Fps = 60;
+
+        public int VideoFps = 60;
+
+        public int BitrateMbps = 18;
+
+        public float EndDelaySeconds = 2f;
+
+        public bool CaptureAudio = true;
+
+        public float AudioGainDb = 0f;
+
+        public bool ShowRenderPreview = true;
+
+        public bool BgaMode = false;
+
+        public bool ShowPlanetRings = true;
+
+        public bool ShowSongTitle = true;
+
+        public bool ShowCountdown = true;
+
+        public bool ShowResultText = true;
+
+        public bool ShowHitJudgments = false;
+
+        public EncoderSpeed Encoding = EncoderSpeed.Quality;
+
+        public VideoEncoder Encoder = VideoEncoder.Auto;
+
+        public VideoCodec Codec = VideoCodec.H264;
+
+        public VideoBitDepth BitDepth = VideoBitDepth.Eight;
+
+        public ProResProfile ProResProfile = ProResProfile.HQ;
+
+        // Defaults are configured by the extension; per-job destinations use request options.
+        public string OutputDirectory = "";
+
+        public bool OpenOutputFolder = true;
+
+        public string FfmpegExecutable = "";
+
+
+        public void OnChange()
+        {
+            // Selecting a built-in preset also copies its resolution and
+            // bitrate into the fields, so switching to Custom starts from a
+            // useful baseline. InGame FPS is deliberately independent from
+            // the preset and must not be overwritten here.
+            if (Preset != RendererPreset.Custom)
+            {
+                var profile = GetPresetProfile(Preset);
+                Width = profile.Width;
+                Height = profile.Height;
+                BitrateMbps = profile.BitrateMbps;
+            }
+            Width = EvenClamp(Width, MinWidth, MaxWidth);
+            Height = EvenClamp(Height, MinHeight, MaxHeight);
+            Fps = Clamp(Fps, MinFps, MaxTargetFps);
+            VideoFps = Clamp(VideoFps, MinFps, MaxVideoFps);
+            BitrateMbps = Clamp(BitrateMbps, MinBitrate, MaxBitrate);
+            if (float.IsNaN(EndDelaySeconds) || float.IsInfinity(EndDelaySeconds)) EndDelaySeconds = 2f;
+            EndDelaySeconds = Math.Max(0f, Math.Min(30f, EndDelaySeconds));
+            AudioGainDb = ClampAudioGainDb(AudioGainDb);
+        }
+
+        internal void ResetToDefaults()
+        {
+            Preset = RendererPreset.FullHD;
+            Width = 1920;
+            Height = 1080;
+            Fps = 60;
+            VideoFps = 60;
+            BitrateMbps = 18;
+            EndDelaySeconds = 2f;
+            CaptureAudio = true;
+            AudioGainDb = 0f;
+            ShowRenderPreview = true;
+            BgaMode = false;
+            ShowPlanetRings = true;
+            ShowSongTitle = true;
+            ShowCountdown = true;
+            ShowResultText = true;
+            ShowHitJudgments = false;
+            Encoding = EncoderSpeed.Quality;
+            Encoder = VideoEncoder.Auto;
+            Codec = VideoCodec.H264;
+            BitDepth = VideoBitDepth.Eight;
+            ProResProfile = ProResProfile.HQ;
+            OutputDirectory = string.Empty;
+            OpenOutputFolder = true;
+            FfmpegExecutable = string.Empty;
+        }
+
+        internal RenderProfile ResolveProfile()
+        {
+            return ResolveProfile(null, null, null, null, null, null, null, null, null);
+        }
+
+        internal RenderProfile ResolveProfile(RendererPreset? presetOverride, int? widthOverride,
+            int? heightOverride, int? targetFpsOverride, int? videoFpsOverride, int? bitrateOverride, float? endDelayOverride,
+            VideoCodec? codecOverride, VideoBitDepth? bitDepthOverride,
+            EncoderSpeed? encodingOverride = null, VideoEncoder? encoderOverride = null,
+            ProResProfile? proResProfileOverride = null, int? crfOverride = null, string pixelFormatOverride = null)
+        {
+            var preset = presetOverride ?? Preset;
+            // A target-FPS override does not turn a built-in resolution preset
+            // into Custom. Width/height/bitrate overrides without an explicit
+            // preset still use the saved Custom values as their base.
+            var useCustomBase = preset == RendererPreset.Custom
+                || (!presetOverride.HasValue
+                    && (widthOverride.HasValue || heightOverride.HasValue || bitrateOverride.HasValue));
+            var baseProfile = useCustomBase
+                ? new RenderProfile(
+                    EvenClamp(Width, MinWidth, MaxWidth),
+                    EvenClamp(Height, MinHeight, MaxHeight),
+                    Clamp(Fps, MinFps, MaxTargetFps),
+                    Clamp(VideoFps, MinFps, MaxVideoFps),
+                    Clamp(BitrateMbps, MinBitrate, MaxBitrate),
+                    "fast", EndDelaySeconds)
+                : GetPresetProfile(preset);
+            var endDelay = endDelayOverride.HasValue
+                ? Clamp(endDelayOverride.Value, 0f, 30f)
+                : baseProfile.EndDelaySeconds;
+            var encoding = encodingOverride ?? Encoding;
+            var encoder = encoderOverride ?? Encoder;
+            // RPC requests naming a preset retain that preset's default rates
+            // unless they explicitly provide target/video FPS. Normal settings
+            // and the export dialog use the independent saved values.
+            var targetFps = targetFpsOverride.HasValue
+                ? Clamp(targetFpsOverride.Value, MinFps, MaxTargetFps)
+                : presetOverride.HasValue && preset != RendererPreset.Custom
+                    ? baseProfile.TargetFps
+                    : Clamp(Fps, MinFps, MaxTargetFps);
+            var videoFps = videoFpsOverride.HasValue
+                ? Clamp(videoFpsOverride.Value, MinFps, MaxVideoFps)
+                : presetOverride.HasValue && preset != RendererPreset.Custom
+                    ? baseProfile.VideoFps
+                    : Clamp(VideoFps, MinFps, MaxVideoFps);
+            return new RenderProfile(
+                widthOverride.HasValue ? EvenClamp(widthOverride.Value, MinWidth, MaxWidth) : baseProfile.Width,
+                heightOverride.HasValue ? EvenClamp(heightOverride.Value, MinHeight, MaxHeight) : baseProfile.Height,
+                targetFps,
+                videoFps,
+                bitrateOverride.HasValue ? Clamp(bitrateOverride.Value, MinBitrate, MaxBitrate) : baseProfile.BitrateMbps,
+                GetEncoderPreset(encoding), endDelay, GetEncoderCodec(codecOverride ?? Codec, encoder), codecOverride ?? Codec,
+                bitDepthOverride ?? BitDepth, proResProfileOverride ?? ProResProfile, crfOverride, pixelFormatOverride);
+        }
+
+
+
+        internal string ResolveOutputDirectory()
+        {
+            var dataPath = Path.GetFullPath(UnityEngine.Application.dataPath);
+            var dataDirectory = new DirectoryInfo(dataPath);
+            // A macOS Unity player reports its Contents directory as
+            // Application.dataPath, while Windows/Linux report <game>_Data.
+            var gameRoot = (UnityEngine.Application.platform == UnityEngine.RuntimePlatform.OSXPlayer
+                || UnityEngine.Application.platform == UnityEngine.RuntimePlatform.OSXEditor)
+                && string.Equals(dataDirectory.Name, "Contents", StringComparison.OrdinalIgnoreCase)
+                ? dataDirectory.FullName
+                : dataDirectory.Parent.FullName;
+            var configured = Environment.ExpandEnvironmentVariables((OutputDirectory ?? string.Empty).Trim());
+            if (string.IsNullOrEmpty(configured)) return Path.Combine(gameRoot, "Renders");
+            if (!Path.IsPathRooted(configured)) configured = Path.Combine(gameRoot, configured);
+            return Path.GetFullPath(configured);
+        }
+
+        internal string ResolveFfmpegExecutable(string modDirectory)
+        {
+            var configured = Environment.ExpandEnvironmentVariables((FfmpegExecutable ?? string.Empty).Trim());
+            if (string.IsNullOrEmpty(configured)) return string.Empty;
+            if (Path.IsPathRooted(configured)) return Path.GetFullPath(configured);
+
+            // A relative path is resolved beside the mod. A bare command name
+            // is returned as-is so Process.Start can resolve it through PATH.
+            var local = Path.Combine(modDirectory, configured);
+            return File.Exists(local) ? Path.GetFullPath(local) : configured;
+        }
+
+        private static RenderProfile GetPresetProfile(RendererPreset preset)
+        {
+            switch (preset)
+            {
+                case RendererPreset.Preview: return new RenderProfile(1280, 720, 30, 30, 8, "veryfast");
+                case RendererPreset.QHD: return new RenderProfile(2560, 1440, 60, 60, 30, "veryfast");
+                case RendererPreset.UHD4K: return new RenderProfile(3840, 2160, 60, 60, 50, "fast");
+                case RendererPreset.FullHD:
+                default: return new RenderProfile(1920, 1080, 60, 60, 18, "veryfast");
+            }
+        }
+
+        private string GetEncoderPreset(EncoderSpeed encoding)
+        {
+            switch (encoding)
+            {
+                case EncoderSpeed.Balanced: return "veryfast";
+                case EncoderSpeed.Quality: return "fast";
+                case EncoderSpeed.Maximum:
+                default: return "ultrafast";
+            }
+        }
+
+        private string GetEncoderCodec(VideoCodec codec, VideoEncoder encoder)
+        {
+            var gpu = (UnityEngine.SystemInfo.graphicsDeviceName ?? string.Empty) + " "
+                + (UnityEngine.SystemInfo.graphicsDeviceVendor ?? string.Empty);
+            var nvidia = ContainsGpuName(gpu, "NVIDIA");
+            var intel = ContainsGpuName(gpu, "Intel");
+            var amd = ContainsGpuName(gpu, "AMD") || ContainsGpuName(gpu, "ATI")
+                || ContainsGpuName(gpu, "Radeon");
+            var platform = UnityEngine.Application.platform;
+            var macOS = platform == UnityEngine.RuntimePlatform.OSXPlayer
+                || platform == UnityEngine.RuntimePlatform.OSXEditor;
+            return VideoCodecCatalog.Get(VideoCodecCatalog.Normalize(codec))
+                .ResolveEncoder(encoder, nvidia, intel, amd, macOS);
+        }
+
+        private static bool ContainsGpuName(string value, string name)
+        {
+            return value.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static int Clamp(int value, int min, int max)
+        {
+            return Math.Max(min, Math.Min(max, value));
+        }
+
+        private void Normalize()
+        {
+            if (!Enum.IsDefined(typeof(RendererPreset), Preset)) Preset = RendererPreset.FullHD;
+            if (!Enum.IsDefined(typeof(EncoderSpeed), Encoding)) Encoding = EncoderSpeed.Quality;
+            Width = EvenClamp(Width, MinWidth, MaxWidth);
+            Height = EvenClamp(Height, MinHeight, MaxHeight);
+            Fps = Clamp(Fps, MinFps, MaxTargetFps);
+            VideoFps = Clamp(VideoFps, MinFps, MaxVideoFps);
+            BitrateMbps = Clamp(BitrateMbps, MinBitrate, MaxBitrate);
+            Codec = VideoCodecCatalog.Normalize(Codec);
+            BitDepth = VideoCodecCatalog.Normalize(BitDepth);
+            ProResProfile = ProResProfiles.Normalize(ProResProfile);
+            if (!Enum.IsDefined(typeof(VideoEncoder), Encoder)) Encoder = VideoEncoder.Auto;
+            if (float.IsNaN(EndDelaySeconds) || float.IsInfinity(EndDelaySeconds)) EndDelaySeconds = 2f;
+            EndDelaySeconds = Clamp(EndDelaySeconds, 0f, 30f);
+            AudioGainDb = ClampAudioGainDb(AudioGainDb);
+        }
+
+        internal static float ClampAudioGainDb(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return 0f;
+            return Clamp(value, MinAudioGainDb, MaxAudioGainDb);
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            return Math.Max(min, Math.Min(max, value));
+        }
+
+        private static int EvenClamp(int value, int min, int max)
+        {
+            var result = Clamp(value, min, max);
+            return (result & 1) == 0 ? result : result == max ? result - 1 : result + 1;
+        }
+    }
+}

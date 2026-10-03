@@ -7,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using TUFReplayRenderer.Media;
+using TUFReplayRenderer.Contracts;
+using TUFReplayRenderer.Replay;
 
 namespace TUFReplayRenderer.Tests;
 
@@ -20,6 +22,7 @@ public static class MediaTests
         Directory.CreateDirectory(directory);
         try
         {
+            TestSelectedMediaPreflight(directory);
             var timeline = new RenderTimeline(1_000_000, 2, 4_000_000);
             Near(timeline.ReplayToOutput(4_000_000), 3_000_000, 1, "clear output time");
             Near(timeline.OutputToReplay(3_500_000), 4_500_000, 1, "post-clear wall clock");
@@ -68,6 +71,9 @@ public static class MediaTests
             for (int i = (int)(1.4 * 48000) * 8; i < (int)(1.8 * 48000) * 8; i += 4)
                 loudPeak = Math.Max(loudPeak, Math.Abs(BitConverter.ToSingle(loudAudio, i)));
             if (loudPeak > 1.1) throw new Exception("Loud microphone peak was not limited before encoding: " + loudPeak);
+            await TestSelectedCodecs(directory, camera);
+            await TestOptionalAudio(directory, game, microphone, timeline, mic);
+            await TestFailureCodes(directory);
             // A real-time input keeps the process active long enough to exercise the production cancellation path.
             using var cancellation = new CancellationTokenSource();
             cancellation.CancelAfter(200);
@@ -79,10 +85,112 @@ public static class MediaTests
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {}
             if (stopwatch.Elapsed.TotalSeconds > 5) throw new Exception("Cancelled FFmpeg did not stop within five seconds.");
-            Console.WriteLine("PASS: actual FFmpeg camera timing, crop/mirror, clear transition, microphone delay/gain, duration and cancellation.");
+            Console.WriteLine("PASS: actual FFmpeg camera timing/crop/clear, selected 10-bit/ProRes4444 alpha, mic-only/noaudio/WebM Opus, precise failure codes, duration and cancellation.");
         }
         finally { Directory.Delete(directory, true); }
     }
+
+    private static void TestSelectedMediaPreflight(string directory)
+    {
+        string bundleDirectory = Path.Combine(directory, "preflight"); Directory.CreateDirectory(bundleDirectory);
+        File.WriteAllText(Path.Combine(bundleDirectory, "inputs.csv"), RecordingCsvReader.InputsHeader + "\n");
+        File.WriteAllText(Path.Combine(bundleDirectory, "hits.csv"), RecordingCsvReader.HitsHeader + "\n");
+        var data = JObject.FromObject(new {
+            schemaVersion = 1, recordingId = "media-preflight", level = new { path = "level.adofai" },
+            replay = new { gameplayStartSongPosition = 0d, effectivePitch = 1d, gameInputOffsetMs = 0d,
+                noFailMode = false, judgmentSystem = "ModernClassic", terminalTimeUs = 0L },
+            inputsFile = "inputs.csv", hitsFile = "hits.csv", media = new { webcam = new { path = "camera.mp4" } }
+        });
+        string manifest = Path.Combine(bundleDirectory, "manifest.json"); File.WriteAllText(manifest, data.ToString());
+        RecordingBundle bundle = RecordingBundle.Load(manifest);
+        try { SelectedMediaFiles.Validate(bundle, new JObject()); throw new Exception("Missing selected media passed preflight."); }
+        catch (RecordingFormatException error) when (error.Code == "render_media_file_missing" && error.Field == "media.webcam.path" && error.File == "camera.mp4") { }
+        SelectedMediaFiles.Validate(bundle, new JObject { ["includeWebcam"] = false });
+        File.WriteAllBytes(Path.Combine(bundleDirectory, "camera.mp4"), Array.Empty<byte>());
+        try { SelectedMediaFiles.Validate(bundle, new JObject()); throw new Exception("Empty selected media passed preflight."); }
+        catch (RecordingFormatException error) when (error.Code == "render_media_file_invalid" && error.Field == "media.webcam.path") { }
+        File.WriteAllBytes(Path.Combine(bundleDirectory, "camera.mp4"), new byte[] { 1 });
+        SelectedMediaFiles.Validate(bundle, new JObject());
+        bundle.Manifest.Media["microphone"] = new JObject { ["path"] = "../outside.wav" };
+        try { SelectedMediaFiles.Validate(bundle, new JObject()); throw new Exception("Unsafe selected microphone path passed preflight."); }
+        catch (RecordingFormatException error) when (error.Code == "render_media_file_invalid" && error.Field == "media.microphone.path" && error.File == "../outside.wav") { }
+    }
+
+    private static async Task TestSelectedCodecs(string directory, string camera)
+    {
+        var timeline = new RenderTimeline(0, 1, null);
+        var webcam = JObject.FromObject(new { gameplayRate = 1d, durationUs = 2_000_000d, captureStartOffsetUs = 0d,
+            layout = new { left = 0d, top = 0d, width = .25, height = .25 } });
+        string tenBit = Path.Combine(directory, "game-tenbit.mp4"), tenBitOutput = Path.Combine(directory, "composed-tenbit.mp4");
+        string[] tenBitEncoding = { "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "lossless=1:pools=1:frame-threads=1:log-level=error", "-pix_fmt", "yuv420p10le" };
+        await Command("ffmpeg", new[] { "-v", "error", "-f", "lavfi", "-i",
+            "nullsrc=s=320x180:r=30:d=1,format=yuv420p10le,geq=lum='mod(X*3+Y*5,1024)':cb=512:cr=512", "-an" }
+            .Concat(tenBitEncoding).Concat(new[] { tenBit }).ToArray());
+        var tenBitPlan = MediaCompositionPlan.Create(tenBit, tenBitOutput, 320, 180, 30, 1_000_000, timeline,
+            webcam, camera, null, null, videoEncoding: tenBitEncoding, captureGameAudio: false);
+        await ExternalProcess.Run("ffmpeg", tenBitPlan.Arguments.ToArray(), CancellationToken.None);
+        string metadata = System.Text.Encoding.UTF8.GetString(await Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name,pix_fmt,nb_frames", "-of", "default=noprint_wrappers=1", tenBitOutput));
+        if (!metadata.Contains("codec_name=hevc") || !metadata.Contains("pix_fmt=yuv420p10le") || !metadata.Contains("nb_frames=30")) throw new Exception("Selected 10-bit codec/frame count was not preserved.");
+        byte[] before = await RawFrame(tenBit, "yuv420p10le"), after = await RawFrame(tenBitOutput, "yuv420p10le");
+        for (int y = 100; y < 160; y++) for (int x = 180; x < 300; x++) {
+            int offset = (y * 320 + x) * 2;
+            if (BitConverter.ToUInt16(before, offset) != BitConverter.ToUInt16(after, offset)) throw new Exception("Overlay composition reduced the base video's 10-bit precision.");
+        }
+        string alpha = Path.Combine(directory, "game-alpha.mov"), alphaOutput = Path.Combine(directory, "composed-alpha.mov");
+        string[] proRes = { "-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le" };
+        await Command("ffmpeg", new[] { "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=30:d=1,format=rgba,colorchannelmixer=aa=0.25", "-an" }
+            .Concat(proRes).Concat(new[] { alpha }).ToArray());
+        var alphaPlan = MediaCompositionPlan.Create(alpha, alphaOutput, 320, 180, 30, 1_000_000, timeline,
+            webcam, camera, null, null, videoEncoding: proRes, captureGameAudio: false);
+        await ExternalProcess.Run("ffmpeg", alphaPlan.Arguments.ToArray(), CancellationToken.None);
+        metadata = System.Text.Encoding.UTF8.GetString(await Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name,profile,pix_fmt,nb_frames", "-of", "default=noprint_wrappers=1", alphaOutput));
+        if (!metadata.Contains("codec_name=prores") || !metadata.Contains("profile=4444") || !metadata.Contains("pix_fmt=yuva444") || !metadata.Contains("nb_frames=30")) throw new Exception("Composition lost selected ProRes4444 profile or alpha format.");
+        byte[] rgba = await RawFrame(alphaOutput, "rgba");
+        Near(rgba[(150 * 320 + 300) * 4 + 3], 64, 3, "ProRes base alpha outside webcam");
+        Near(rgba[(10 * 320 + 10) * 4 + 3], 255, 1, "opaque webcam alpha over transparent base");
+    }
+
+    private static async Task TestOptionalAudio(string directory, string game, string microphone, RenderTimeline timeline, JObject mic)
+    {
+        string silent = Path.Combine(directory, "game-silent.mp4");
+        await Command("ffmpeg", "-v", "error", "-i", game, "-map", "0:v", "-c:v", "copy", "-an", silent);
+        string micOnly = Path.Combine(directory, "microphone-only.mp4");
+        var micPlan = MediaCompositionPlan.Create(silent, micOnly, 320, 180, 30, 4_000_000, timeline,
+            null, null, mic, microphone, captureGameAudio: false);
+        if (micPlan.FilterGraph.Contains("[0:a")) throw new Exception("Mic-only plan references absent game audio.");
+        await ExternalProcess.Run("ffmpeg", micPlan.Arguments.ToArray(), CancellationToken.None);
+        byte[] audio = await Command("ffmpeg", "-v", "error", "-i", micOnly, "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1");
+        Near(Rms(audio, .8, 1.05), 0, .001, "mic-only delayed start");
+        Near(Rms(audio, 1.4, 1.8), .125 * .5 / Math.Sqrt(2), .01, "mic-only gain");
+        Near(Rms(audio, 3.5, 3.8), 0, .001, "mic-only padded tail");
+        string muted = Path.Combine(directory, "no-audio.mp4");
+        var mutedPlan = MediaCompositionPlan.Create(game, muted, 320, 180, 30, 1_000_000, timeline,
+            null, null, null, null, captureGameAudio: false);
+        if (!mutedPlan.Arguments.Contains("-an")) throw new Exception("No-audio plan omitted explicit audio exclusion.");
+        await ExternalProcess.Run("ffmpeg", mutedPlan.Arguments.ToArray(), CancellationToken.None);
+        string streams = System.Text.Encoding.UTF8.GetString(await Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", muted));
+        if (streams.Contains("audio")) throw new Exception("No-audio render retained a game audio stream.");
+        string webm = Path.Combine(directory, "microphone-only.webm");
+        var webmPlan = MediaCompositionPlan.Create(silent, webm, 320, 180, 30, 4_000_000, timeline,
+            null, null, mic, microphone, videoEncoding: new[] { "-c:v", "libvpx-vp9", "-crf", "40", "-b:v", "0", "-cpu-used", "8", "-pix_fmt", "yuv420p" }, captureGameAudio: false);
+        await ExternalProcess.Run("ffmpeg", webmPlan.Arguments.ToArray(), CancellationToken.None);
+        streams = System.Text.Encoding.UTF8.GetString(await Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0", webm));
+        if (!streams.Contains("vp9") || !streams.Contains("opus") || webmPlan.Arguments.Contains("-movflags")) throw new Exception("WebM render did not retain VP9/Opus container-compatible encoding.");
+    }
+
+    private static async Task TestFailureCodes(string directory)
+    {
+        foreach (var test in new[] { (Text: "No space left on device", Code: "render_storage_full"),
+            (Text: "Permission denied", Code: "render_access_denied"), (Text: "Unknown encoder 'no_encoder'", Code: "render_encoder_unavailable") })
+            if ((string)ExternalProcess.ClassifyFailure(test.Text, 1).Data["code"] != test.Code) throw new Exception("FFmpeg failure classification lost " + test.Code);
+        try {
+            await ExternalProcess.Run("ffmpeg", new[] { "-v", "error", "-f", "lavfi", "-i", "color=s=32x32:d=1", "-c:v", "tuf_no_such_encoder", Path.Combine(directory, "bad-codec.mp4") }, CancellationToken.None);
+            throw new Exception("Missing encoder unexpectedly succeeded.");
+        }
+        catch (InvalidOperationException error) when ((string)error.Data["code"] == "render_encoder_unavailable") { }
+    }
+
+    private static Task<byte[]> RawFrame(string output, string pixel) => Command("ffmpeg", "-v", "error", "-i", output, "-ss", "0.5", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", pixel, "pipe:1");
 
     private static Task<byte[]> Frame(string output, double seconds) => Command("ffmpeg", "-v", "error", "-i", output, "-ss", seconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1");
     private static void Near(double actual, double expected, double tolerance, string label)

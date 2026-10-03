@@ -1,96 +1,31 @@
-# ImplDmNote transparent replay export
+# Automatic ImplDmNote rendering
 
-The renderer runs ImplDmNote's existing GPL overlay in an isolated Chromium page. It uses the complete overlay App, including its DOM keys, labels, counters, KPS graphs, custom CSS and WebGL note tracks. No key events are injected into the OS and no RPC reaches the desktop app after snapshot capture. Live preset settings and cumulative counters are preserved.
+Run the renderer-compatible ImplDmNote app alongside ADOFAI. The app announces its native render capability through the existing ADOFAI-IPC namespace `tuf-replay-renderer`; the web renderer offers ImplDmNote when a compatible app is connected. Render acquires the app session before changing game state and releases it after composition, failure or cancellation. Consumers need no source checkout, frozen snapshot file, Node, Chrome or separate OBS connection.
 
-The current development runtime requires the licensed ImplDmNote frontend source and its installed workspace dependencies. Set `IMPL_DMNOTE_SOURCE` or `--app` to `impl-resourcepack/apps/impl-dm-note`. Node, FFmpeg and an installed Chrome/Playwright Chromium runtime are required; the helper does not install them. Release packaging must include a pinned, licensed frontend/runtime dependency rather than relying on a developer's source checkout. Browser/source/font versions affect raster output and must be pinned for cross-machine pixel equality.
+The independent GPL renderer and GPL app communicate through data messages. The proprietary recorder has no ImplDmNote code dependency. The app owns its installed frontend and native runtime: WKWebView on macOS, WebView2 on Windows.
 
-## Capture a portable frozen preset
+## Session protocol 1
 
-Turn on ImplDmNote OBS mode, then capture its authenticated local endpoint. Save its session token in a file outside the repository; tokens are not printed or saved in the snapshot bundle.
+The game namespace has background handlers `dmnote.hello`, `dmnote.poll` and `dmnote.reply`. They never block Unity's frame thread. An app instance announces `applicationId`, `protocolVersion`, `applicationVersion`, `platform` and `nativeCapture`. Poll returns at most one command `{id,method,params}` and whether the session is active. Reply returns `{applicationId,id,result}` or `{applicationId,id,error:{code,message}}`. Repeated polls do not execute a command twice. A second app cannot take over an active session.
 
-```sh
-node tools/impl-dmnote-export/snapshot.mjs \
-  --capture-snapshot ws://127.0.0.1:34891 \
-  --token-file /path/to/private-obs-token.txt \
-  --app /path/to/impl-resourcepack/apps/impl-dm-note \
-  --output /path/to/frozen.json
-```
+Commands are `begin`, `reset`, `frame` and `end`. Begin freezes the current preset, selected viewer, custom CSS/JS, current plugin panel layout, plugin storage, local storage and local asset bytes. It gates the native keyboard/mouse/HID/shortcut consumer before counters, sounds, plugin input or live viewer events. Begin returns width/height and a temporary frame directory. Reset recreates the isolated surface from the same frozen data after the game pass calibrates its timeline; it retains the input gate.
 
-Capture subscribes once to the existing OBS snapshot, disconnects, and copies referenced local fonts/images through the app's authorized media endpoint. It also freezes external CSS/font URLs and the frontend's builtin font resources. The file format is:
+A frame has `sessionId`, monotonically increasing `frameIndex`, integer `outputTimeUs`, integer `replayTimeUs`, and recorded events `{key,down,sequence,outputTimeUs,replayTimeUs}`. Keys are symbolic Unity KeyCode names from bundle version 1. Input timestamps map through the recorded effective pitch and advance at rate 1 after clear. Equal-timestamp ordering preserves the CSV sequence; negative preroll inputs and down/up pulses entirely between frames remain intact.
 
-```json
-{
-  "version": 1,
-  "implDmNoteVersion": "0.1.0",
-  "snapshot": { "settings": {}, "defaults": {}, "keys": {} },
-  "assets": {
-    "/original/local/font.woff2": {
-      "file": "frozen.json.assets/sha256.bin",
-      "contentType": "font/woff2",
-      "sha256": "asset content hash"
-    }
-  }
-}
-```
+The surface applies inputs and samples its virtual clock, timers, rAF, CSS animations, React state and WebGL at the requested output time. Native snapshot completion provides the paint barrier. The ACK contains the exact frame index/time and PNG path. The app retains only `frame.png` and its temporary replacement; the renderer waits until FFmpeg consumes it before requesting another frame. A validated streaming CSV cursor keeps the alpha pass independent of recording length. FFmpeg produces an alpha FFV1 intermediate, and the media composer places it using the user's overlay layout.
 
-`snapshot` is the complete native `BootstrapPayload`; the shortened example is not a usable fixture. Asset file paths are relative to the bundle directory. Move the JSON and its `.assets` directory together. A job that embeds the bundle must resolve asset paths against the bundle directory before merging them. Capture needs the app's OBS endpoint; rendering an already captured bundle does not need the app to be running.
+## Isolation and cleanup
 
-## Export an alpha video
+The private webview has a nonpersistent data store and an in-memory native API shim. Preset, counter and plugin writes stay inside it. Render counters start at zero because recordings do not contain the original live counter baseline; replaying over the post-clear cumulative counter would count the run twice. Existing live counts are never rewritten.
 
-```sh
-node tools/impl-dmnote-export/render.mjs \
-  --manifest /path/to/dmnote-job.json \
-  --snapshot /path/to/frozen.json \
-  --app /path/to/impl-resourcepack/apps/impl-dm-note \
-  --output /path/to/keys-alpha.mkv
-```
+The app coordinator polls while native capture is pending, so End can interrupt a stalled frame. End destroys the private surface, deletes its frame cache and re-enables real input. Session boundaries release live held-key indicators to avoid stuck keys after ignored physical key-up events. A real-time backend watchdog performs cleanup within 15 seconds after connection loss. The renderer removes incomplete alpha files and stops FFmpeg on cancellation. Expired heartbeats are no longer offered as available.
 
-Use `--chrome /path/to/chrome` or `--ffmpeg /path/to/ffmpeg` to select executables explicitly. The helper detects cached Playwright Chromium and conventional installed Chrome paths. `--snapshot` replaces the job's embedded snapshot/assets with the frozen bundle; alternatively the job can provide them directly. Existing output videos are never overwritten.
+The whole overlay is captured: DOM keys/text/counters/statistics/plugin panels and WebGL notes. Plugins using normal recorded-key, raw-key, statistics and clock APIs work in this surface. Plugins requesting live app actions, external-process state, separate Worker clocks or new network data require a replay-specific contract. Local fonts/images and bundled frontend assets are retained by the app; remote dynamic resources need to be stable and load successfully during preparation.
 
-```json
-{
-  "version": 1,
-  "width": 640,
-  "height": 360,
-  "viewerKind": "hand",
-  "fpsNumerator": 60000,
-  "fpsDenominator": 1001,
-  "frameCount": 3600,
-  "eventsFile": "inputs.csv",
-  "timeline": [
-    { "outputTimeUs": 0, "replayTimeUs": 0, "rate": 1.25 },
-    { "outputTimeUs": 10000000, "replayTimeUs": 12500000, "rate": 1 }
-  ]
-}
-```
+## Verification and distribution
 
-The event file is relative to the job manifest. It contains normalized Unity `KeyCode` names from TUFReplay, such as `Return`, `LeftArrow`, `BackQuote` and `RightControl`, rather than OS-native integer codes:
+Renderer: `./scripts/run.sh dmnote-check` tests actual bridge/session code with an isolated app transport, exact pitch/preroll mapping, streaming FFmpeg alpha output, frame ordering, ownership, heartbeat expiry and cancellation cleanup.
 
-```csv
-timeUs,key,down,sequence
-5000,A,1,0
-10000,A,0,1
-120000,KeypadEnter,true,2
-200000,KeypadEnter,false,3
-```
+ImplDmNote: `./scripts/run.sh desktop-check` runs frontend/IPC cancellation regressions and offline native compilation. `desktop-render-test` creates a hidden, nonpersistent macOS WKWebView using synthetic data only. It verifies full overlay alpha, between-frame taps, held keys, mouse mapping, an updating custom plugin panel/storage and identical PNG hashes across two 40-frame sessions. It never starts the user's app or input daemon. macOS native compilation and runtime fixture are verified; Windows capture still needs a Windows run.
 
-`timeUs` uses the replay conductor timeline. `sequence` preserves the original ordering for equal timestamps. Symbolic keys are mapped to all matching DmNote labels/aliases in the selected preset, including numeric modifier aliases used by the original app. Unity `Mouse0` through `Mouse4` map to its existing `MOUSE1` through `MOUSE5` labels. The helper also accepts the source mapper's `LogicalKeyboardKey` spellings. Keys absent from the selected tab are ignored; unsupported key kinds are explicit failures. Preserved input is used for display regardless of whether it counted as a successful gameplay hit.
-
-Frame time is calculated from its index and rational FPS, without accumulating floating-point deltas. Timeline `rate` means replay microseconds per output microsecond; after clear, use rate 1. Continuous segments and pauses are supported; discontinuous seek/restart timelines require separate jobs. Inputs before frame zero are pre-rolled to establish held keys and active note trails. Input timestamps are inversely mapped into output time and processed before each frame, so short DOWN/UP pairs between video frames survive. DmNote animation and delay clocks advance in output time.
-
-The snapshot's initial counters are used as given. Set `keyCounters` to empty/zero for session counters, or retain captured values for cumulative counters. The helper increments only its isolated local copy. Hand and foot exports use independent viewer surfaces and can be placed/scaled by the parent compositor.
-
-The output is lossless FFV1 with BGRA alpha in Matroska. Each screenshot is piped directly to FFmpeg and waits for writable backpressure; a frame acknowledgement is emitted only after its pixels are handed to the consumer. Frame buffers and captured resources are bounded. A 4K raw image sequence is not written to disk. `--png-directory` is available for short technical inspection only. stdout is JSON Lines (`frame`, then `complete`) and stderr reports failures. SIGINT/SIGTERM cancels the browser, encoder and local server and removes the partial video.
-
-JavaScript plugins, native key sounds, gamepad/HID axes and arbitrary animated media are not certified by this initial export runtime. JavaScript-enabled presets fail explicitly because their time and side effects require a render-aware plugin contract. Local/custom CSS, static images and fonts use frozen resources; no new remote dependency is accepted after initial asset preparation. Video/media skins need a deterministic decoder before they can be certified.
-
-## Verification
-
-```sh
-node --test tools/impl-dmnote-export/timing.test.mjs
-IMPL_DMNOTE_SOURCE=/path/to/impl-resourcepack/apps/impl-dm-note \
-CHROME_EXECUTABLE=/path/to/chrome \
-node tools/impl-dmnote-export/verify.mjs
-```
-
-The verification first captures an authenticated mock OBS snapshot, freezes its font bytes and verifies the portable bundle contains no session token. Browser verification then runs the actual overlay with note effects and counters, exports two independently initialized 40-frame clips at 2x replay rate, compares every PNG hash, checks short taps/held keys, inspects FFV1 frame count and alpha pixels with FFmpeg, then cancels another render after one frame. It uses temporary files and cleans them up. It does not open ADOFAI or access camera/microphone devices.
+`./scripts/run.sh desktop-bundle` creates an embedded app bundle in the app repository. On macOS it signs the app/helper locally, verifies the signature and writes `Release/ImplDmNote-Renderer-macos-<arch>.zip`. This development artifact is not installed or launched by the workflow. The renderer package contains its bridge and these docs rather than a browser/export-helper runtime. Run the patched app after quitting an older running build; the existing single-instance behavior otherwise brings the older app forward.

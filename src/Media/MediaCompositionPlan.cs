@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 
@@ -15,7 +16,8 @@ public sealed class MediaCompositionPlan
 
     public static MediaCompositionPlan Create(string game, string output, int width, int height, int fps,
         double durationUs, RenderTimeline timeline, JObject webcam, string webcamPath,
-        JObject microphone, string microphonePath, string dmnotePath = null, JObject dmnoteLayout = null)
+        JObject microphone, string microphonePath, string dmnotePath = null, JObject dmnoteLayout = null,
+        string[] videoEncoding = null, bool captureGameAudio = true)
     {
         if (width <= 0 || height <= 0 || fps <= 0 || durationUs <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         var plan = new MediaCompositionPlan();
@@ -23,7 +25,8 @@ public sealed class MediaCompositionPlan
         plan.Arguments.AddRange(new[] { "-nostdin", "-hide_banner", "-y", "-i", game });
         int input = 1;
         string video = "0:v";
-        string audio = "0:a:0";
+        string audio = captureGameAudio ? "0:a:0" : null;
+        string overlayFormat = OverlayFormat(videoEncoding);
         if (webcam != null && webcamPath != null)
         {
             int cameraIndex = input++;
@@ -71,7 +74,7 @@ public sealed class MediaCompositionPlan
                     filters.Add("[cam" + i + "]trim=start=" + N(clip.sourceStart / 1e6) + ":end=" + N(clip.sourceEnd / 1e6)
                         + ",setpts=(PTS-STARTPTS)/" + N(clip.rate) + "+" + N(clip.start / 1e6) + "/TB," + appearance + "[camera" + i + "]");
                     filters.Add("[" + video + "][camera" + i + "]overlay=x=" + x + ":y=" + y
-                        + ":eof_action=pass:repeatlast=0:enable='gte(t," + N(clip.start / 1e6) + ")*lt(t," + N(clip.end / 1e6) + ")'[v" + i + "]");
+                        + ":format=" + overlayFormat + ":eof_action=pass:repeatlast=0:enable='gte(t," + N(clip.start / 1e6) + ")*lt(t," + N(clip.end / 1e6) + ")'[v" + i + "]");
                     video = "v" + i;
                 }
                 }
@@ -87,7 +90,7 @@ public sealed class MediaCompositionPlan
             double scale = (double?)layout["scale"] ?? 1;
             if (double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0 || scale > 8) throw new InvalidOperationException("Invalid ImplDmNote scale.");
             filters.Add("[" + noteIndex + ":v]scale=iw*" + N(scale) + ":ih*" + N(scale) + "[notescaled]");
-            filters.Add("[" + video + "][notescaled]overlay=" + x + ":" + y + ":eof_action=pass:repeatlast=0[note]");
+            filters.Add("[" + video + "][notescaled]overlay=" + x + ":" + y + ":format=" + overlayFormat + ":eof_action=pass:repeatlast=0[note]");
             video = "note";
         }
         if (microphone != null && microphonePath != null)
@@ -101,16 +104,36 @@ public sealed class MediaCompositionPlan
             if (double.IsNaN(gain) || double.IsInfinity(gain) || gain < 0 || gain > 32) throw new InvalidOperationException("Invalid microphone volume.");
             filters.Add("[" + micIndex + ":a]atrim=start=" + N(skipUs / 1e6) + ",asetpts=PTS-STARTPTS,volume=" + N(gain)
                 + ",adelay=" + N(Math.Max(0, delayUs) / 1000) + ":all=1[microphone]");
-            filters.Add("[0:a:0][microphone]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:attack=1:release=50:level=0:latency=1[mix]");
+            if (captureGameAudio)
+                filters.Add("[0:a:0][microphone]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:attack=1:release=50:level=0:latency=1[mix]");
+            else
+                filters.Add("[microphone]apad=whole_dur=" + N(durationUs / 1e6) + ",atrim=end=" + N(durationUs / 1e6)
+                    + ",alimiter=limit=0.95:attack=1:release=50:level=0:latency=1[mix]");
             audio = "mix";
         }
         plan.FilterGraph = string.Join(";", filters);
         if (filters.Count > 0) plan.Arguments.AddRange(new[] { "-filter_complex", plan.FilterGraph });
-        plan.Arguments.AddRange(new[] { "-map", video == "0:v" ? video : "[" + video + "]",
-            "-map", audio == "0:a:0" ? audio : "[" + audio + "]", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-r", N(fps), "-c:a", "aac", "-b:a", "320k", "-t", N(durationUs / 1e6),
-            "-movflags", "+faststart", "-progress", "pipe:1", output });
+        plan.Arguments.AddRange(new[] { "-map", video == "0:v" ? video : "[" + video + "]" });
+        if (audio == null) plan.Arguments.Add("-an");
+        else plan.Arguments.AddRange(new[] { "-map", audio == "0:a:0" ? audio : "[" + audio + "]" });
+        plan.Arguments.AddRange(videoEncoding ?? new[] { "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p" });
+        string extension = Path.GetExtension(output).ToLowerInvariant();
+        bool webm = extension == ".webm";
+        plan.Arguments.AddRange(new[] { "-r", N(fps), "-t", N(durationUs / 1e6) });
+        if (audio != null) plan.Arguments.AddRange(webm ? new[] { "-c:a", "libopus", "-b:a", "160k" } : new[] { "-c:a", "aac", "-b:a", "320k" });
+        if (!webm) plan.Arguments.AddRange(new[] { "-movflags", "+faststart" });
+        plan.Arguments.AddRange(new[] { "-progress", "pipe:1", output });
         return plan;
+    }
+
+    private static string OverlayFormat(string[] encoding)
+    {
+        int index = encoding == null ? -1 : Array.IndexOf(encoding, "-pix_fmt");
+        string pixel = index >= 0 && index + 1 < encoding.Length ? encoding[index + 1] : "yuv420p";
+        return pixel == "yuv420p10le" ? "yuv420p10"
+            : pixel == "yuv422p10le" || pixel == "p210le" ? "yuv422p10"
+            : pixel == "yuva444p10le" ? "yuv444p10"
+            : pixel == "bgra" || pixel == "rgba" ? "rgb" : "yuv420";
     }
 
     private static string CameraAppearance(JObject camera, int width, int height, out int x, out int y)

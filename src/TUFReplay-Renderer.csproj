@@ -3,27 +3,29 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>TUFReplay-Renderer</AssemblyName>
+    <Version>0.2.0</Version>
     <RootNamespace>TUFReplayRenderer</RootNamespace>
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
     <GameDir Condition="'$(GameDir)' == ''">$(ADOFaiGameDir)</GameDir>
-    <OrbitRoot Condition="'$(OrbitRoot)' == ''">../../OrbitRender</OrbitRoot>
     <AdofaiManaged Condition="'$(AdofaiManaged)' == ''">$(GameDir)/A Dance of Fire and Ice_Data/Managed</AdofaiManaged>
     <ModManagerDir Condition="'$(ModManagerDir)' == ''">$(AdofaiManaged)/UnityModManager</ModManagerDir>
     <AdofaiIpcDll Condition="'$(AdofaiIpcDll)' == ''">$(GameDir)/Mods/AdofaiIpc/Runtime/versions/0.4.1/AdofaiIpc.dll</AdofaiIpcDll>
-    <OrbitDll Condition="'$(OrbitDll)' == ''">$(OrbitRoot)/OrbitRender/bin/Release/OrbitRender.dll</OrbitDll>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="$(AdofaiManaged)/UnityEngine*.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Assembly-CSharp.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Assembly-CSharp-firstpass.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/RDTools.dll"><Private>false</Private></Reference>
+    <Reference Include="$(AdofaiManaged)/Unity.Collections.dll"><Private>false</Private></Reference>
+    <Reference Include="$(AdofaiManaged)/Unity.TextMeshPro.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/DOTween.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Newtonsoft.Json.dll"><Private>false</Private></Reference>
     <Reference Include="$(ModManagerDir)/UnityModManager.dll"><Private>false</Private></Reference>
     <Reference Include="$(ModManagerDir)/0Harmony.dll"><Private>false</Private></Reference>
-    <Reference Include="OrbitRender"><HintPath>$(OrbitDll)</HintPath><Private>false</Private></Reference>
     <Reference Include="AdofaiIpc"><HintPath>$(AdofaiIpcDll)</HintPath><Private>false</Private></Reference>
+    <EmbeddedResource Include="Engine/Localization/*.ftl" />
   </ItemGroup>
 </Project>

@@ -12,6 +12,9 @@ using OrbitRender.Renderer;
 using TUFReplayRenderer.Contracts;
 using TUFReplayRenderer.Media;
 using TUFReplayRenderer.Replay;
+using TUFReplayRenderer.Configuration;
+using TUFReplayRenderer.Engine;
+using TUFReplayRenderer.Integrations.DmNote;
 using UnityEngine;
 
 namespace TUFReplayRenderer.Jobs;
@@ -28,9 +31,17 @@ public sealed class RenderJobController : MonoBehaviour
     private RendererController reservedRenderer;
     private IDisposable replayRenderReservation;
     private Coroutine routine;
+    private bool executingJob;
     private OptionalModClock optionalClock;
     private Task backgroundWork;
-    public bool Busy => routine != null || (active != null && !active.Finished);
+    private DmNoteRenderSession dmNoteSession;
+    private Task<DmNoteRenderSession> dmNoteBeginning;
+    public bool Busy => executingJob || (active != null && !active.Finished);
+    internal string CurrentJobId => active?.Id;
+    internal string CurrentState => active?.State;
+    internal double CurrentProgress => active?.Progress ?? 0;
+    internal bool CanCancelCurrent => active != null && !active.Finished && !active.Cancellation.IsCancellationRequested;
+    internal bool ShowPreview => active?.Options?.ShowRenderPreview == true;
 
     internal void Initialize(string modDirectory, RendererSettings rendererSettings)
     {
@@ -47,25 +58,41 @@ public sealed class RenderJobController : MonoBehaviour
     {
         if (Busy || RendererController.Instance?.Busy == true || RendererController.Instance?.ReplayRenderReserved == true)
             return Error("renderer_busy", "Another render is running. Wait for it to finish or cancel it.");
-        string manifest = (string)parameters?["manifestPath"];
+        string manifest;
+        try { manifest = (string)parameters?["manifestPath"]; }
+        catch (Exception) { return Error("bundle_path_invalid", "The recording bundle path must be a file path."); }
         if (string.IsNullOrWhiteSpace(manifest) || !File.Exists(manifest)) return Error("bundle_missing", "Export the recording before rendering it.");
-        int width, height, fps;
+        RenderOptions options;
         try
         {
-            width = (int?)parameters["width"] ?? 1920; height = (int?)parameters["height"] ?? 1080; fps = (int?)parameters["fps"] ?? 60;
-            if (width < 320 || width > 7680 || height < 180 || height > 4320 || width % 2 != 0 || height % 2 != 0 || fps < 24 || fps > 240)
-                return Error("render_settings_invalid", "Choose an even video size up to 7680×4320 and a frame rate between 24 and 240.");
+            options = RenderOptions.Read(parameters, settings.Defaults);
+            options.OutputDirectory = OutputDirectoryService.ValidateWritable(options.OutputDirectory);
+            Main.ValidateEncoding(options);
         }
-        catch (Exception) { return Error("render_settings_invalid", "The video size or frame rate is invalid."); }
-        if (RendererController.Instance == null) return Error("orbit_unavailable", "Enable OrbitRender and TUFReplay-Renderer in the mod manager.");
-        var job = new RenderJob { Parameters = parameters, WorkDirectory = Path.Combine(directory, Guid.NewGuid().ToString("N")) };
-        Directory.CreateDirectory(job.WorkDirectory);
+        catch (RenderOperationException error) { return Error(error.Code, error.Message, new { field = error.Field }); }
+        if (!EmbeddedRenderEngine.Available) return Error("render_engine_unavailable", "Enable TUFReplay-Renderer in the mod manager and try again.");
+        var job = new RenderJob { Options = options, Parameters = options.ToJson(),
+            WorkDirectory = Path.Combine(options.OutputDirectory, ".tuf-replay-renderer", Guid.NewGuid().ToString("N")) };
+        try { Directory.CreateDirectory(job.WorkDirectory); }
+        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException) {
+            return Error("output_directory_unwritable", "The render workspace could not be created in the save folder. Check permissions and free space.");
+        }
         jobs.TryAdd(job.Id, job); active = job;
-        routine = StartCoroutine(Guarded(Run(job, manifest, width, height, fps), job));
+        executingJob = true;
+        routine = StartCoroutine(Guarded(Run(job, manifest, options.Width, options.Height, options.VideoFps), job));
+        if (!executingJob) routine = null;
         return job.Snapshot();
     }
 
     public object Status(string jobId) => Find(jobId)?.Snapshot() ?? Error("render_not_found", "This render is no longer available. Start it again.");
+    internal string OutputDirectoryFor(string jobId)
+    {
+        if (string.IsNullOrEmpty(jobId)) return null;
+        var job = Find(jobId);
+        if (job == null) throw new RenderOperationException("render_not_found", "This render is no longer available. Open the displayed save path in your file manager.");
+        if (job.State != "completed") throw new RenderOperationException("render_not_ready", "The video has not finished saving yet.");
+        return Path.GetDirectoryName(job.Output);
+    }
     public object Cancel(string jobId)
     {
         var job = Find(jobId);
@@ -80,7 +107,8 @@ public sealed class RenderJobController : MonoBehaviour
             return new IpcDownloadError("render_not_ready", "The rendered video is not ready.", 404);
         string path = job.Output;
         long length = new FileInfo(path).Length;
-        return new IpcDownloadResponse("video/mp4", length, Path.GetFileName(path), stream => {
+        string extension = Path.GetExtension(path).ToLowerInvariant();
+        return new IpcDownloadResponse(extension == ".webm" ? "video/webm" : extension == ".mov" ? "video/quicktime" : "video/mp4", length, Path.GetFileName(path), stream => {
             using var file = File.OpenRead(path);
             file.CopyTo(stream, 128 * 1024);
         });
@@ -100,7 +128,7 @@ public sealed class RenderJobController : MonoBehaviour
             catch (Exception exception)
             {
                 job.State = exception is OperationCanceledException ? "cancelled" : "failed";
-                job.Error = exception is OperationCanceledException ? null : exception.GetBaseException().Message;
+                SetFailure(job, exception);
                 Main.Entry.Logger.Log("Render " + job.Id + ": " + job.State + " " + job.Error);
                 break;
             }
@@ -112,38 +140,67 @@ public sealed class RenderJobController : MonoBehaviour
         while (OwnsOrbitRun && activeRenderer.Busy) yield return null;
         while (backgroundWork != null && !backgroundWork.IsCompleted) yield return null;
         backgroundWork = null;
-        if (job.RawGameOutput != null) { try { File.Delete(job.RawGameOutput); } catch (IOException) {} }
+        if (dmNoteSession == null && dmNoteBeginning?.Status == TaskStatus.RanToCompletion) dmNoteSession = dmNoteBeginning.Result;
+        dmNoteBeginning = null;
+        if (dmNoteSession != null) {
+            Task ending = dmNoteSession.EndAsync();
+            while (!ending.IsCompleted) yield return null;
+            try { ending.GetAwaiter().GetResult(); } catch (Exception error) { Main.Entry.Logger.Error("ImplDmNote cleanup: " + error.Message); }
+            dmNoteSession.Dispose(); dmNoteSession = null;
+        }
+        if (job.RawGameOutput != null) { try { File.Delete(job.RawGameOutput); } catch (Exception error) when (error is IOException || error is UnauthorizedAccessException) {} }
         try { RestoreReplayState(); }
         catch (Exception exception) {
             job.State = "failed";
-            job.Error = exception.GetBaseException().Message;
+            SetFailure(job, exception);
             Main.Entry.Logger.Log("Render " + job.Id + ": failed during restoration " + job.Error);
         }
         job.UpdatedAtUtc = DateTime.UtcNow;
         if (job.State != "completed") {
-            try { Directory.Delete(job.WorkDirectory, true); } catch (IOException) {}
-            if (job.Output != null) File.Delete(job.Output + ".partial");
+            try { Directory.Delete(job.WorkDirectory, true); } catch (Exception error) when (error is IOException || error is UnauthorizedAccessException) {}
+            if (job.Output != null) { try { File.Delete(job.Output + ".partial"); } catch (Exception error) when (error is IOException || error is UnauthorizedAccessException) {} }
         }
         routine = null;
+        executingJob = false;
     }
 
     private IEnumerator Run(RenderJob job, string manifestPath, int width, int height, int fps)
     {
         Task<RecordingBundle> preparation = Task.Run(() => {
             var recording = RecordingBundle.Load(manifestPath);
+            MediaComposer.ValidateSelectedMedia(recording, job.Parameters);
             recording.ValidateLevelHash();
             return recording;
         }, job.Cancellation.Token);
         backgroundWork = preparation;
         while (!preparation.IsCompleted) yield return null;
         var bundle = preparation.GetAwaiter().GetResult();
+        var ffmpegCheck = EmbeddedRenderEngine.ValidateFfmpegAsync(settings.FfmpegExecutable, job.Cancellation.Token);
+        backgroundWork = ffmpegCheck;
+        while (!ffmpegCheck.IsCompleted) yield return null;
+        EngineFfmpegStatus ffmpegStatus = ffmpegCheck.GetAwaiter().GetResult();
+        if (!ffmpegStatus.Available) throw new RenderOperationException("ffmpeg_unavailable", ffmpegStatus.Reason ?? "FFmpeg is unavailable. Install it or choose its executable in renderer settings.");
+        var options = job.Options;
+        EmbeddedRenderEngine.Configure(ffmpegStatus.Path, options.OutputDirectory);
+        var requestOptions = options.ToEngineOptions(null);
+        string extension = EmbeddedRenderEngine.GetContainerExtension(requestOptions);
+        job.Output = Path.Combine(options.OutputDirectory, "TUFReplay-" + job.Id + extension);
+        string[] videoEncoding = EmbeddedRenderEngine.GetVideoEncodingArguments(requestOptions);
+        if (options.IncludeDmNote) {
+            var note = settings.DmNote ?? new DmNoteSettings();
+            var beginning = dmNoteBeginning = Main.DmNote.BeginSessionAsync(Math.Min(width, note.Width), Math.Min(height, note.Height), note.ViewerKind, 0, job.Cancellation.Token);
+            backgroundWork = beginning;
+            while (!beginning.IsCompleted) yield return null;
+            dmNoteSession = beginning.GetAwaiter().GetResult();
+        }
         string levelPath = bundle.ResolveLevelPath();
-        if (!File.Exists(levelPath)) throw new FileNotFoundException("The recorded level file was moved. Select the level file and export again.");
+        if (!File.Exists(levelPath)) throw new RenderOperationException("level_missing", "The recorded level file was moved or deleted. Restore the recorded file and export again.");
         reservedRenderer = RendererController.Instance;
-        if (reservedRenderer == null) throw new InvalidOperationException("Enable OrbitRender before rendering the recording.");
+        if (reservedRenderer == null) throw new RenderOperationException("render_engine_unavailable", "Enable TUFReplay-Renderer before rendering the recording.");
         replayRenderReservation = reservedRenderer.TryReserveReplayRender();
         if (replayRenderReservation == null)
-            throw new InvalidOperationException("Another render is running. Wait for it to finish or cancel it.");
+            throw new RenderOperationException(reservedRenderer.FailureCode == "orbit_conflict" ? "orbit_conflict" : "renderer_busy",
+                reservedRenderer.FailureCode == "orbit_conflict" ? reservedRenderer.Message : "Another render is running. Wait for it to finish or cancel it.");
         double editorDeadline = Time.realtimeSinceStartupAsDouble + 60;
         bool requestedEditor = false;
         while (ADOBase.editor == null || !ADOBase.editor.gameObject.activeInHierarchy)
@@ -153,7 +210,7 @@ public sealed class RenderJobController : MonoBehaviour
                 if (scrLoader.instance != null) { scrLoader.instance.GoToLevelEditor(); requestedEditor = true; }
                 else if (ADOBase.controller != null) { ADOBase.controller.GoToLevelEditor(); requestedEditor = true; }
             }
-            if (Time.realtimeSinceStartupAsDouble > editorDeadline) throw new TimeoutException("The level editor did not open. Open the editor and try again.");
+            if (Time.realtimeSinceStartupAsDouble > editorDeadline) throw new RenderOperationException("editor_open_timeout", "The level editor did not open within one minute. Open the editor and try rendering again.");
             yield return null;
         }
         EnsureReservedRenderer();
@@ -170,7 +227,7 @@ public sealed class RenderJobController : MonoBehaviour
             editor = ADOBase.editor;
             if (editor != null && !editor.isLoading && editor.customLevel?.levelData != null && editor.floors?.Count > 1
                 && Path.GetFullPath(editor.customLevel.levelPath) == Path.GetFullPath(levelPath) && (++frames >= 5 || editor.customLevel != previousLevel)) break;
-            if (Time.realtimeSinceStartupAsDouble > loadDeadline) throw new TimeoutException("The level did not finish loading. Open it in the editor and try again.");
+            if (Time.realtimeSinceStartupAsDouble > loadDeadline) throw new RenderOperationException("level_load_timeout", "The recorded level did not finish loading within two minutes. Check that it opens in the editor and try again.");
         }
         EnsureReservedRenderer();
         activeDriver = new RecordedReplayDriver(bundle);
@@ -178,18 +235,16 @@ public sealed class RenderJobController : MonoBehaviour
         optionalClock = OptionalModClock.Begin(message => job.Warnings.Enqueue(message));
         activeDriver.PrepareBeforeRender();
         activeRenderer = reservedRenderer;
-        activeRenderer.StartRender(new RenderRequestOptions {
-            Preset = RendererPreset.Custom, Width = width, Height = height,
-            TargetFps = Math.Max(240, fps), VideoFps = fps, EndDelaySeconds = 2,
-            CaptureAudio = true, OpenOutputFolder = false, ShowRenderPreview = true,
-            VideoCodec = VideoCodec.H264,
-            BitDepth = VideoBitDepth.Eight,
-            ReplayDriver = activeDriver, CaptureCanvases = CaptureOverlays,
-            ReplayRenderReservation = replayRenderReservation
-        });
+        job.RawGameOutput = Path.Combine(job.WorkDirectory, "game" + extension);
+        requestOptions.CustomOutputPath = job.RawGameOutput;
+        requestOptions.OutputDirectory = job.WorkDirectory;
+        requestOptions.ReplayDriver = activeDriver; requestOptions.CaptureCanvases = CaptureOverlays;
+        requestOptions.PresentationCanvases = () => Main.ProgressUi.PresentationCanvases();
+        requestOptions.ReplayRenderReservation = replayRenderReservation;
+        activeRenderer.StartRender(requestOptions);
         activeRenderClock = activeRenderer.Clock;
+        if (!activeRenderer.Busy) throw new RenderOperationException(activeRenderer.FailureCode ?? "render_engine_start_failed", activeRenderer.Message);
         EnsureOwnOrbitRun();
-        if (!activeRenderer.Busy) throw new InvalidOperationException(activeRenderer.Message);
         job.State = "rendering";
         while (true) {
             EnsureOwnOrbitRun();
@@ -199,8 +254,8 @@ public sealed class RenderJobController : MonoBehaviour
         }
         EnsureOwnOrbitRun();
         if (activeRenderer.State == RenderState.Cancelled) throw new OperationCanceledException();
-        if (activeRenderer.State != RenderState.Completed) throw new InvalidOperationException(activeRenderer.Message);
-        if (!activeDriver.GameplayStartVideoTimeUs.HasValue) throw new InvalidOperationException("The replay never entered gameplay. Check the recording and level.");
+        if (activeRenderer.State != RenderState.Completed) throw new RenderOperationException(activeRenderer.FailureCode ?? "render_engine_failed", activeRenderer.Message);
+        if (!activeDriver.GameplayStartVideoTimeUs.HasValue) throw new RenderOperationException("replay_gameplay_not_started", "The replay did not enter gameplay. Check that this recording was made with the same level and game version.");
         var timeline = new RenderTimeline(activeDriver.GameplayStartVideoTimeUs.Value, bundle.Manifest.Replay.EffectivePitch, bundle.Manifest.Replay.WonTimeUs);
         string gameOutput = activeRenderer.OutputPath;
         job.RawGameOutput = gameOutput;
@@ -209,15 +264,18 @@ public sealed class RenderJobController : MonoBehaviour
         RestoreReplayState(); // Release Orbit only after the original game settings and clock hooks are restored.
         job.State = "compositing";
         job.Progress = .85;
-        job.Output = Path.Combine(directory, "TUFReplay-" + job.Id + ".mp4");
         Task composition = MediaComposer.Compose(bundle, timeline, gameOutput, job.Output, job.WorkDirectory,
-            ffmpeg, width, height, fps, capturedFrames, settings, job.Parameters, job.Cancellation.Token);
+            ffmpeg, width, height, fps, capturedFrames, settings, job.Parameters, job.Cancellation.Token,
+            dmNoteSession, videoEncoding, options.CaptureAudio, value => job.Progress = .85 + .14 * value);
         backgroundWork = composition;
         while (!composition.IsCompleted) yield return null;
         composition.GetAwaiter().GetResult();
         job.Progress = 1;
         job.State = "completed";
-        Directory.Delete(job.WorkDirectory, true);
+        try { Directory.Delete(job.WorkDirectory, true); }
+        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException) {
+            job.Warnings.Enqueue("The video was saved, but temporary render files could not be removed. Remove this folder when the render finishes: " + job.WorkDirectory);
+        }
         PruneJobs();
     }
 
@@ -226,7 +284,7 @@ public sealed class RenderJobController : MonoBehaviour
 
     private void EnsureOwnOrbitRun()
     {
-        if (!OwnsOrbitRun) throw new InvalidOperationException("The render session changed. Start the recording render again.");
+        if (!OwnsOrbitRun) throw new RenderOperationException("render_session_changed", "The render session was replaced while this job was running. Start the recording render again.");
     }
 
     private void EnsureReservedRenderer()
@@ -234,7 +292,7 @@ public sealed class RenderJobController : MonoBehaviour
         if (replayRenderReservation == null || reservedRenderer == null
             || !ReferenceEquals(RendererController.Instance, reservedRenderer)
             || !reservedRenderer.ReplayRenderReserved || reservedRenderer.Busy)
-            throw new InvalidOperationException("OrbitRender became unavailable during preparation. Enable it and try again.");
+            throw new RenderOperationException("render_engine_unavailable", "The render engine became unavailable during preparation. Enable TUFReplay-Renderer and try again.");
     }
 
     private void RestoreReplayState()
@@ -258,7 +316,8 @@ public sealed class RenderJobController : MonoBehaviour
     private static IEnumerable<Canvas> CaptureOverlays() => UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
         .Where(canvas => canvas != null && canvas.isRootCanvas && canvas.enabled && canvas.gameObject.activeInHierarchy
             && canvas.renderMode == RenderMode.ScreenSpaceOverlay
-            && canvas.gameObject.scene.name == "DontDestroyOnLoad" && !IsControlCanvas(canvas));
+            && canvas.gameObject.scene.name == "DontDestroyOnLoad" && !IsControlCanvas(canvas))
+        .Concat(ReplayHitErrorMeter.CaptureCanvases()).Distinct();
     private static bool IsControlCanvas(Canvas canvas)
     {
         for (Transform parent = canvas.transform; parent != null; parent = parent.parent)
@@ -271,11 +330,32 @@ public sealed class RenderJobController : MonoBehaviour
         return false;
     }
     private RenderJob Find(string id) => id != null && jobs.TryGetValue(id, out var job) ? job : null;
-    private static object Error(string code, string message) => new { error = new { code, message } };
+    private static object Error(string code, string message, object details = null) => new { error = new { code, message, details } };
+    private static void SetFailure(RenderJob job, Exception exception)
+    {
+        Exception error = exception;
+        while ((error is AggregateException || error is System.Reflection.TargetInvocationException) && error.InnerException != null) error = error.InnerException;
+        job.Error = error is OperationCanceledException ? null : error.Message;
+        if (error is OperationCanceledException) { job.ErrorCode = null; job.ErrorDetails = null; return; }
+        if (error is RecordingFormatException format) {
+            job.ErrorCode = format.Code;
+            job.ErrorDetails = new { field = format.Field, line = format.Line, file = format.File };
+        }
+        else if (error is RenderOperationException operation) {
+            job.ErrorCode = operation.Code; job.ErrorDetails = new { field = operation.Field };
+        }
+        else if (error.Data["code"] is string code) {
+            job.ErrorCode = code;
+            job.ErrorDetails = new { detail = error.Data["detail"] as string };
+        }
+        else if (error is UnauthorizedAccessException) job.ErrorCode = "render_access_denied";
+        else if (error is FileNotFoundException || error is DirectoryNotFoundException) job.ErrorCode = "render_file_missing";
+        else if (error is IOException) job.ErrorCode = "render_io_failed";
+        else job.ErrorCode = "render_failed";
+    }
     private void PruneJobs()
     {
         foreach (var old in jobs.Values.Where(j => j != active && j.Finished && j.UpdatedAtUtc < DateTime.UtcNow.AddDays(-7)).ToArray()) {
-            if (old.Output != null) File.Delete(old.Output);
             jobs.TryRemove(old.Id, out _); old.Cancellation.Dispose();
         }
     }
@@ -289,12 +369,21 @@ public sealed class RenderJobController : MonoBehaviour
             try { if (routine != null) StopCoroutine(routine); }
             finally {
                 routine = null;
+                executingJob = false;
                 try { RestoreReplayState(); }
                 finally {
                     if (active != null && (interruptedRoutine || !active.Finished)) {
                         if (!active.Finished) active.State = "cancelled";
                         var interrupted = active;
-                        _ = (backgroundWork ?? Task.CompletedTask).ContinueWith(_ => {
+                        var noteSession = dmNoteSession;
+                        var noteBeginning = dmNoteBeginning;
+                        dmNoteSession = null; dmNoteBeginning = null;
+                        _ = (backgroundWork ?? Task.CompletedTask).ContinueWith(async _ => {
+                            var endingSession = noteSession ?? (noteBeginning?.Status == TaskStatus.RanToCompletion ? noteBeginning.Result : null);
+                            if (endingSession != null) {
+                                try { await endingSession.EndAsync().ConfigureAwait(false); } catch (Exception) {}
+                                endingSession.Dispose();
+                            }
                             try { if (Directory.Exists(interrupted.WorkDirectory)) Directory.Delete(interrupted.WorkDirectory, true); } catch (IOException) {}
                             if (interrupted.Output != null) { try { File.Delete(interrupted.Output + ".partial"); } catch (IOException) {} }
                             if (interrupted.RawGameOutput != null) { try { File.Delete(interrupted.RawGameOutput); } catch (IOException) {} }

@@ -1,70 +1,92 @@
 using System;
-using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using TUFReplayRenderer.Contracts;
+using TUFReplayRenderer.Integrations.DmNote;
 
 namespace TUFReplayRenderer.Media;
 
 internal static class MediaComposer
 {
-    public static async Task Compose(RecordingBundle bundle, RenderTimeline timeline, string gameVideo,
+    public static void ValidateSelectedMedia(RecordingBundle bundle, JObject options) => SelectedMediaFiles.Validate(bundle, options);
+
+    public static Task Compose(RecordingBundle bundle, RenderTimeline timeline, string gameVideo,
         string output, string workDirectory, string ffmpeg, int width, int height, int fps,
-        long frameCount, RendererSettings settings, JObject options, CancellationToken cancellation)
+        long frameCount, RendererSettings settings, JObject options, CancellationToken cancellation,
+        DmNoteRenderSession session = null, string[] videoEncoding = null, bool captureGameAudio = true,
+        Action<double> progress = null)
     {
-        await Task.Run(async () => {
-            cancellation.ThrowIfCancellationRequested();
-            JObject media = bundle.Manifest.Media;
-            JObject camera = (bool?)options["includeWebcam"] != false ? media?["webcam"] as JObject : null;
-            JObject microphone = (bool?)options["includeMicrophone"] != false ? media?["microphone"] as JObject : null;
-            string cameraPath = camera == null ? null : bundle.ResolveFile((string)camera["path"]);
-            string microphonePath = microphone == null ? null : bundle.ResolveFile((string)microphone["path"]);
-            string noteVideo = null;
-            JObject noteLayout = null;
-            if ((bool?)options["includeDmNote"] != false && settings.DmNote != null)
-            {
-                var note = settings.DmNote;
-                if (string.IsNullOrWhiteSpace(note.AppPath) || !Directory.Exists(note.AppPath)
-                    || string.IsNullOrWhiteSpace(note.SnapshotPath) || !File.Exists(note.SnapshotPath))
-                    throw new InvalidOperationException("ImplDmNote is configured but its app or frozen preset is missing. Capture the preset again or disable ImplDmNote for this render.");
-                if (note.Width <= 0 || note.Width > width || note.Height <= 0 || note.Height > height)
-                    throw new InvalidOperationException("The ImplDmNote overlay must fit within the rendered video.");
-                string helper = Path.Combine(Main.Entry.Path, "tools", "impl-dmnote-export", "render.mjs");
-                if (!File.Exists(helper)) throw new FileNotFoundException("The ImplDmNote export helper is missing. Reinstall the complete renderer package.", helper);
-                string jobFile = Path.Combine(workDirectory, "dmnote-job.json");
-                var job = new {
-                    version = 1, width = note.Width, height = note.Height, viewerKind = note.ViewerKind,
-                    fpsNumerator = fps, fpsDenominator = 1, frameCount,
-                    timeline = timeline.ToSegments(), eventsFile = bundle.ResolveFile(bundle.Manifest.InputsFile)
-                };
-                File.WriteAllText(jobFile, JsonConvert.SerializeObject(job));
-                noteVideo = Path.Combine(workDirectory, "dmnote-alpha.mkv");
-                var arguments = new List<string> { helper, "--manifest", jobFile, "--output", noteVideo,
-                    "--app", Path.GetFullPath(note.AppPath), "--snapshot", Path.GetFullPath(note.SnapshotPath), "--ffmpeg", ffmpeg };
-                if (!string.IsNullOrWhiteSpace(note.ChromePath)) arguments.AddRange(new[] { "--chrome", note.ChromePath });
-                await ExternalProcess.Run(settings.NodePath, arguments.ToArray(), cancellation).ConfigureAwait(false);
-                noteLayout = JObject.FromObject(new { left = note.Left, top = note.Top, scale = note.Scale });
+        return Task.Run(async () => {
+            string publishedPartial = output + ".partial";
+            string encodedPartial = Path.Combine(workDirectory, "composed" + Path.GetExtension(output));
+            bool completed = false;
+            try {
+                cancellation.ThrowIfCancellationRequested();
+                progress?.Invoke(0);
+                JObject media = bundle.Manifest.Media;
+                JObject camera = (bool?)options?["includeWebcam"] != false ? media?["webcam"] as JObject : null;
+                JObject microphone = (bool?)options?["includeMicrophone"] != false ? media?["microphone"] as JObject : null;
+                string cameraPath = camera == null ? null : bundle.ResolveFile((string)camera["path"]);
+                string microphonePath = microphone == null ? null : bundle.ResolveFile((string)microphone["path"]);
+                string noteVideo = null;
+                JObject noteLayout = null;
+                bool renderNote = (bool?)options?["includeDmNote"] != false && session != null;
+                double compositionStart = renderNote ? .35 : 0;
+                if (renderNote) {
+                    noteVideo = Path.Combine(workDirectory, "dmnote-alpha.mkv");
+                    await session.ExportAlphaAsync(bundle, timeline, frameCount, fps, noteVideo, ffmpeg,
+                        cancellation, frame => progress?.Invoke(.35 * Math.Min(1, frame / (double)frameCount))).ConfigureAwait(false);
+                    var note = settings.DmNote ?? new DmNoteSettings();
+                    noteLayout = JObject.FromObject(new { left = note.Left, top = note.Top, scale = note.Scale });
+                }
+                cancellation.ThrowIfCancellationRequested();
+                if (cameraPath == null && microphonePath == null && noteVideo == null) {
+                    // The job workspace and final output are on the selected drive.
+                    // Renaming publishes even very large raw videos without copying.
+                    File.Move(gameVideo, publishedPartial);
+                }
+                else {
+                    var plan = MediaCompositionPlan.Create(gameVideo, encodedPartial, width, height, fps,
+                        frameCount * 1e6 / fps, timeline, camera, cameraPath, microphone, microphonePath,
+                        noteVideo, noteLayout, videoEncoding, captureGameAudio);
+                    await ExternalProcess.Run(ffmpeg, plan.Arguments.ToArray(), cancellation, line => {
+                        const string key = "out_time_us=";
+                        if (line.StartsWith(key, StringComparison.Ordinal)
+                            && long.TryParse(line.Substring(key.Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out long timeUs))
+                            progress?.Invoke(compositionStart + (1 - compositionStart)
+                                * Math.Max(0, Math.Min(.99, timeUs / (frameCount * 1e6 / fps))));
+                    }).ConfigureAwait(false);
+                    File.Move(encodedPartial, publishedPartial);
+                }
+                cancellation.ThrowIfCancellationRequested();
+                File.Move(publishedPartial, output);
+                completed = true;
+                progress?.Invoke(1);
             }
-            if (cameraPath == null && microphonePath == null && noteVideo == null)
-            {
-                using var source = File.OpenRead(gameVideo);
-                using var destination = new FileStream(output + ".partial", FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, true);
-                await source.CopyToAsync(destination, 128 * 1024, cancellation).ConfigureAwait(false);
-                await destination.FlushAsync(cancellation).ConfigureAwait(false);
+            catch (IOException error) {
+                ExternalProcess.ClassifyFileFailure(error);
+                throw;
             }
-            else
-            {
-                string partial = Path.Combine(workDirectory, "composed.mp4");
-                var plan = MediaCompositionPlan.Create(gameVideo, partial, width, height, fps,
-                    frameCount * 1e6 / fps, timeline, camera, cameraPath, microphone, microphonePath, noteVideo, noteLayout);
-                await ExternalProcess.Run(ffmpeg, plan.Arguments.ToArray(), cancellation).ConfigureAwait(false);
-                File.Move(partial, output + ".partial");
+            catch (UnauthorizedAccessException error) {
+                ExternalProcess.ClassifyFileFailure(error);
+                throw;
             }
-            cancellation.ThrowIfCancellationRequested();
-            File.Move(output + ".partial", output);
-        }, cancellation).ConfigureAwait(false);
+            finally {
+                if (!completed) {
+                    TryDelete(publishedPartial);
+                    TryDelete(encodedPartial);
+                }
+            }
+        }, cancellation);
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 }

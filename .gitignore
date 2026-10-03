@@ -8,3 +8,12 @@ node_modules/
 /jobs/
 /renders/
 .env
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+**/[Mm]emoryCaptures/
+**/[Rr]ecordings/
+/TUFReplay-Renderer.Unity/*.csproj
+/TUFReplay-Renderer.Unity/*.sln
+/TUFReplay-Renderer.Unity/*.slnx

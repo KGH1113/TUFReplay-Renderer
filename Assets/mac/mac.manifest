@@ -1,0 +1,9 @@
+ManifestFileVersion: 0
+UnityVersion: 6000.3.10f1
+CRC: 3134288749
+HashAppended: 0
+AssetBundleManifest:
+  AssetBundleInfos:
+    Info_0:
+      Name: tufreplay_renderer_ui.bundle
+      Dependencies: {}

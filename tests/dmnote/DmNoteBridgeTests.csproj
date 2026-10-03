@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems><Nullable>disable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="../../src/Integrations/DmNote/*.cs" />
+    <Compile Include="../../src/Media/RenderTimeline.cs" />
+    <Compile Include="../../src/Media/ExternalProcess.cs" />
+    <Compile Include="../../src/Replay/RecordingCsvReader.cs" />
+    <Compile Include="../../src/Replay/RecordedEvents.cs" />
+    <Compile Include="../../src/Contracts/RecordingManifest.cs" />
+    <Reference Include="Newtonsoft.Json"><HintPath>/Users/kgh/Library/Application Support/Steam/steamapps/common/A Dance of Fire and Ice/ADanceOfFireAndIce.app/Contents/Resources/Data/Managed/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

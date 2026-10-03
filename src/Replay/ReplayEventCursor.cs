@@ -20,6 +20,17 @@ public sealed class ReplayEventCursor
   public int HitsConsumed => hitIndex;
   public bool AllHitsConsumed => hitIndex == hits.Length;
 
+  // Countdown keys drive visual input before the player can accept gameplay hits.
+  public void AdvanceInputsTo(long timeUs, Action<RecordedKeyEvent> input)
+  {
+    if (timeUs < previousTimeUs) throw new InvalidOperationException("An export timeline cannot move backwards.");
+    previousTimeUs = timeUs;
+    while (inputIndex < inputs.Length && inputs[inputIndex].TimeUs <= timeUs) {
+      input(inputs[inputIndex]);
+      inputIndex++;
+    }
+  }
+
   public void AdvanceTo(long timeUs, Action<RecordedKeyEvent> input, Action<RecordedHitEvent> hit)
   {
     if (timeUs < previousTimeUs) throw new InvalidOperationException("An export timeline cannot move backwards.");
