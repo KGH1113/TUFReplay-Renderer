@@ -117,7 +117,7 @@ internal sealed class DmNoteRenderBridge : IDisposable
     }
 
     public async Task<DmNoteRenderSession> BeginSessionAsync(int width, int height, string viewerKind,
-        long initialOutputTimeUs, CancellationToken cancellation, JObject placement = null)
+        long initialOutputTimeUs, CancellationToken cancellation, JObject placement = null, int timeoutMs = 30000)
     {
         string id;
         lock (sync) {
@@ -133,7 +133,7 @@ internal sealed class DmNoteRenderBridge : IDisposable
                 ["frameFormat"] = "rgba"
             };
             if (placement != null) request.Merge(placement);
-            JObject result = await CommandAsync("begin", request, cancellation).ConfigureAwait(false);
+            JObject result = await CommandAsync("begin", request, cancellation, timeoutMs).ConfigureAwait(false);
             return new DmNoteRenderSession(this, id, result);
         }
         catch {

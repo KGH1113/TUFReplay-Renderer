@@ -14,6 +14,7 @@ internal static class Program
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
     public static async Task Main()
     {
+        InitializationRetryTests.Run();
         string directory = Path.Combine(Path.GetTempPath(), "dmnote-bridge-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(directory);
         try {
@@ -32,6 +33,16 @@ internal static class Program
             ipc.Call("dmnote.hello", Hello()); Check(bridge.IsAvailable, "A compatible native app must become available.");
             using var app = new FakeApp(ipc, directory, image);
             Task worker = app.Run();
+            app.BeginFailure = "render-game-window-missing: The game's window bounds could not be read.";
+            try {
+                await bridge.BeginSessionAsync(8, 8, "hand", 0, CancellationToken.None, new JObject { ["automaticPlacement"] = true });
+                throw new Exception("Native window lookup failure was ignored.");
+            }
+            catch (DmNoteRenderException error) {
+                Check(error.Code == "dmnote_capture_failed" && error.Message.Contains("render-game-window-missing:"), "Existing app errors must retain the native window identifier.");
+            }
+            Check(!app.Gated && app.Ends == 1, "Failed initialization must release the input gate before waiting for game focus.");
+            app.BeginFailure = null;
             DmNoteRenderSession session = await bridge.BeginSessionAsync(8, 8, "hand", -200000, CancellationToken.None);
             Check(app.Gated, "Preparation must gate live inputs before the game pass.");
             rejected = false;
@@ -82,6 +93,8 @@ internal static class Program
         private readonly System.Collections.Generic.HashSet<string> handled = new();
         private volatile bool stopped;
         public bool Gated, HangFrame, Raw;
+        public string BeginFailure;
+        public int Ends;
         public readonly JArray Frames = new();
         public readonly TaskCompletionSource<bool> FrameWaiting = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public FakeApp(AdofaiIpcNamespace ipc, string directory, string image) { this.ipc = ipc; this.directory = directory; this.image = image; }
@@ -90,8 +103,16 @@ internal static class Program
                 JObject command = ipc.Call("dmnote.poll", new JObject { ["applicationId"] = "fixture" })["command"] as JObject;
                 if (command != null && handled.Add((string)command["id"])) {
                     JObject result = new(); string method = (string)command["method"];
-                    if (method == "begin") { Gated = true; result = new JObject { ["width"] = 8, ["height"] = 8, ["frameDirectory"] = directory, ["frameFormat"] = Raw ? "rgba" : "png", ["layout"] = new JObject { ["left"] = .25, ["top"] = .5, ["scale"] = 1 } }; }
-                    if (method == "end") { Gated = false; result["ended"] = true; }
+                    if (method == "begin") {
+                        Gated = true;
+                        if (BeginFailure != null) {
+                            ipc.Call("dmnote.reply", new JObject { ["applicationId"] = "fixture", ["id"] = command["id"],
+                                ["error"] = new JObject { ["code"] = "dmnote_capture_failed", ["message"] = BeginFailure } });
+                            continue;
+                        }
+                        result = new JObject { ["width"] = 8, ["height"] = 8, ["frameDirectory"] = directory, ["frameFormat"] = Raw ? "rgba" : "png", ["layout"] = new JObject { ["left"] = .25, ["top"] = .5, ["scale"] = 1 } };
+                    }
+                    if (method == "end") { Ends++; Gated = false; result["ended"] = true; }
                     if (method == "frame") {
                         if (HangFrame) { FrameWaiting.TrySetResult(true); await Task.Delay(1); continue; }
                         Check(Gated, "Native frames must be isolated from live input.");

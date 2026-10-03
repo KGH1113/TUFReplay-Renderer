@@ -15,6 +15,7 @@ internal sealed class RenderJob
     internal string ErrorCode;
     internal object ErrorDetails;
     internal double Progress;
+    internal bool WaitingForGameFocus;
     internal string Output;
     internal string RawGameOutput;
     internal string WorkDirectory;
@@ -26,6 +27,7 @@ internal sealed class RenderJob
     internal object Snapshot() => new {
         jobId = Id, state = State, errorMessage = Error, errorCode = ErrorCode, errorDetails = ErrorDetails,
         progress = Math.Max(0, Math.Min(1, Progress)),
+        waitingForGameFocus = !Finished && WaitingForGameFocus,
         outputFile = Output == null ? null : System.IO.Path.GetFileName(Output),
         outputDirectory = Options?.OutputDirectory, localOutputPath = State == "completed" ? Output : null,
         canOpenOutput = State == "completed" && System.IO.File.Exists(Output),

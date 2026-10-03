@@ -20,6 +20,8 @@ For ImplDmNote, run the patched desktop app with its normal preset and overlay w
 
 ## Overlay compatibility
 
+If ImplDmNote cannot read the game window for automatic placement, preparation waits up to 30 seconds for ADOFAI to receive focus and retries with fresh window dimensions. Restore and click the game window, or cancel from the web/game progress UI. A timeout distinguishes missing game focus from window metadata that remains unreadable after focus. Manual placement and other capture errors retain their existing behavior; this recovery also works with the existing patched ImplDmNote app.
+
 The generic Canvas compositor captures active overlay roots in the persistent Unity scene, including custom text, keys, masks and ordering. The native hit error meter is recreated from the game's own prefab in editor renders and receives recorded judgments. Input adapters feed supported key viewers from recorded events, including signed countdown timestamps, and mod clock call sites use the render timeline. The game controls, render progress and TUF replay/camera setup controls are excluded.
 
 Pixel capture, virtual input and animation synchronization are separate capabilities. The renderer reports compatibility warnings in its job status. See [the recording contract and limitations](docs/recording-bundle-v1.md); installed-mod behavior still requires an actual game render test. Arbitrary native window capture and arbitrary mod video decoders are outside the deterministic Canvas path.

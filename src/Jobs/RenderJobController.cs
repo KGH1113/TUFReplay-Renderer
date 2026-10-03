@@ -36,10 +36,12 @@ public sealed class RenderJobController : MonoBehaviour
     private Task backgroundWork;
     private DmNoteRenderSession dmNoteSession;
     private Task<DmNoteRenderSession> dmNoteBeginning;
+    private bool? dmNotePreparationBackground;
     public bool Busy => executingJob || (active != null && !active.Finished);
     internal string CurrentJobId => active?.Id;
     internal string CurrentState => active?.State;
     internal double CurrentProgress => active?.Progress ?? 0;
+    internal bool WaitingForGameFocus => active?.WaitingForGameFocus == true && !active.Finished;
     internal bool CanCancelCurrent => active != null && !active.Finished && !active.Cancellation.IsCancellationRequested;
     internal bool ShowPreview => active?.Options?.ShowRenderPreview == true;
 
@@ -188,16 +190,39 @@ public sealed class RenderJobController : MonoBehaviour
         string[] videoEncoding = EmbeddedRenderEngine.GetVideoEncodingArguments(requestOptions);
         if (options.IncludeDmNote) {
             var note = settings.DmNote ?? new DmNoteSettings();
-            var placement = new JObject {
-                ["automaticPlacement"] = note.AutomaticPlacement,
-                ["gameProcessId"] = System.Diagnostics.Process.GetCurrentProcess().Id,
-                ["gameViewportWidth"] = Screen.width, ["gameViewportHeight"] = Screen.height,
-                ["outputWidth"] = width, ["outputHeight"] = height
-            };
-            var beginning = dmNoteBeginning = Main.DmNote.BeginSessionAsync(Math.Min(width, note.Width), Math.Min(height, note.Height), note.ViewerKind, 0, job.Cancellation.Token, placement);
-            backgroundWork = beginning;
-            while (!beginning.IsCompleted) yield return null;
-            dmNoteSession = beginning.GetAwaiter().GetResult();
+            var retry = new DmNoteInitializationRetry();
+            if (note.AutomaticPlacement) {
+                dmNotePreparationBackground = Application.runInBackground;
+                // Timers and the web cancel command must still run while the
+                // user is outside the game. Restore the preference before render.
+                Application.runInBackground = true;
+            }
+            try {
+                while (dmNoteSession == null) {
+                    job.Cancellation.Token.ThrowIfCancellationRequested();
+                    job.WaitingForGameFocus = false;
+                    // Read the drawable size again after restoring/focusing the window.
+                    var placement = new JObject {
+                        ["automaticPlacement"] = note.AutomaticPlacement,
+                        ["gameProcessId"] = System.Diagnostics.Process.GetCurrentProcess().Id,
+                        ["gameViewportWidth"] = Screen.width, ["gameViewportHeight"] = Screen.height,
+                        ["outputWidth"] = width, ["outputHeight"] = height
+                    };
+                    var beginning = dmNoteBeginning = Main.DmNote.BeginSessionAsync(Math.Min(width, note.Width), Math.Min(height, note.Height), note.ViewerKind, 0, job.Cancellation.Token, placement,
+                        retry.CommandTimeoutMs(Time.realtimeSinceStartupAsDouble));
+                    backgroundWork = beginning;
+                    while (!beginning.IsCompleted) yield return null;
+                    try { dmNoteSession = beginning.GetAwaiter().GetResult(); }
+                    catch (DmNoteRenderException error) {
+                        if (!retry.HandleFailure(error, note.AutomaticPlacement, Time.realtimeSinceStartupAsDouble, Application.isFocused)) throw;
+                    }
+                    if (dmNoteSession != null) break;
+                    job.WaitingForGameFocus = true;
+                    while (!retry.CanRetry(Time.realtimeSinceStartupAsDouble, Application.isFocused, job.Cancellation.Token))
+                        yield return null;
+                }
+            }
+            finally { job.WaitingForGameFocus = false; RestoreDmNotePreparationBackground(); }
             if (note.AutomaticPlacement && dmNoteSession.Layout == null)
                 throw new RenderOperationException("dmnote_capture_failed", "This ImplDmNote app cannot match the live overlay position. Update ImplDmNote or disable automaticPlacement in renderer.settings.json.");
         }
@@ -307,8 +332,17 @@ public sealed class RenderJobController : MonoBehaviour
             throw new RenderOperationException("render_engine_unavailable", "The render engine became unavailable during preparation. Enable TUFReplay-Renderer and try again.");
     }
 
+    private void RestoreDmNotePreparationBackground()
+    {
+        if (!dmNotePreparationBackground.HasValue) return;
+        Application.runInBackground = dmNotePreparationBackground.Value;
+        dmNotePreparationBackground = null;
+    }
+
     private void RestoreReplayState()
     {
+        // Shutdown can stop the coroutine while preparation is waiting.
+        RestoreDmNotePreparationBackground();
         try { activeDriver?.RestoreAfterRender(); }
         finally {
             try { optionalClock?.Dispose(); }

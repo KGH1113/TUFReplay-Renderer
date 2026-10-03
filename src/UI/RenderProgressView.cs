@@ -58,11 +58,15 @@ internal sealed class RenderProgressView : MonoBehaviour
         if (view.activeSelf != show) view.SetActive(show);
         if (!show) return;
         string state = jobs.CurrentState;
-        if (lastStage != state) {
-            lastStage = state;
-            stage.text = state == "preparing" ? (korean ? "렌더 준비 중" : "Preparing render")
+        bool waitingForFocus = jobs.WaitingForGameFocus;
+        string displayState = waitingForFocus ? "waiting_for_game_focus" : state;
+        if (lastStage != displayState) {
+            lastStage = displayState;
+            stage.text = waitingForFocus ? (korean ? "게임 창 확인 대기 중" : "Waiting for the game window")
+                : state == "preparing" ? (korean ? "렌더 준비 중" : "Preparing render")
                 : state == "compositing" ? (korean ? "영상 합성 중" : "Compositing video") : (korean ? "렌더링 중" : "Rendering");
-            detail.text = state == "preparing" ? (korean ? "기록과 렌더 설정을 확인하고 있어요" : "Checking the recording and render settings")
+            detail.text = waitingForFocus ? (korean ? "얼불춤 창을 복원하고 클릭해 주세요. 최대 30초 동안 기다리며 취소할 수 있어요." : "Restore and click the ADOFAI window. Waiting up to 30 seconds; you can cancel.")
+                : state == "preparing" ? (korean ? "기록과 렌더 설정을 확인하고 있어요" : "Checking the recording and render settings")
                 : state == "compositing" ? (korean ? "카메라·오디오·키뷰어를 합치고 있어요" : "Combining recorded media and overlays")
                 : (korean ? "기록된 플레이를 영상으로 만들고 있어요" : "Turning the recorded play into video");
         }
