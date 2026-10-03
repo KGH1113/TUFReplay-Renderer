@@ -1,0 +1,7 @@
+# Unity writes empty YAML scalars with a trailing space and regenerates them on save.
+# Keep importer-owned serialization intact; source code retains normal whitespace checks.
+*.meta -whitespace
+*.asset -whitespace
+*.prefab -whitespace
+*.unity -whitespace
+"TUFReplay-Renderer.Unity/Assets/TextMesh Pro/Shaders/*" -whitespace
