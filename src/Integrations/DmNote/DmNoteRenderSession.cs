@@ -1,8 +1,7 @@
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -16,30 +15,66 @@ internal sealed class DmNoteRenderSession : IDisposable
 {
     private readonly DmNoteRenderBridge bridge;
     private readonly string id;
-    private readonly string directory;
+    private readonly Surface[] surfaces;
+    private readonly bool multiple;
     private int ended;
-    public int Width { get; }
-    public int Height { get; }
-    public JObject Layout { get; }
-    private readonly bool rgba;
+    public int Width => surfaces[0].Width;
+    public int Height => surfaces[0].Height;
+    public JObject Layout => surfaces[0].Layout;
+    public bool HasAutomaticLayouts => surfaces.All(surface => surface.Layout != null);
+
+    private sealed class Surface
+    {
+        public readonly string Viewer, Directory;
+        public readonly int Width, Height;
+        public readonly JObject Layout;
+        public readonly bool Rgba;
+        public Surface(JObject value, bool requireViewer)
+        {
+            Viewer = (string)value["viewerKind"];
+            Width = (int?)value["width"] ?? 0; Height = (int?)value["height"] ?? 0;
+            Layout = value["layout"] as JObject;
+            string format = (string)value["frameFormat"] ?? "png";
+            if (format != "png" && format != "rgba")
+                throw Failure("ImplDmNote returned an unsupported pixel format.");
+            Rgba = format == "rgba";
+            Directory = (string)value["frameDirectory"];
+            if (Width <= 0 || Height <= 0 || Width > 8192 || Height > 8192 || (long)Width * Height * 4 > 128 * 1024 * 1024
+                || string.IsNullOrWhiteSpace(Directory) || !Path.IsPathRooted(Directory)
+                || (requireViewer && Viewer != "hand" && Viewer != "foot"))
+                throw Failure("ImplDmNote returned an invalid render surface.");
+        }
+    }
 
     internal DmNoteRenderSession(DmNoteRenderBridge bridge, string id, JObject result)
     {
         this.bridge = bridge; this.id = id;
-        Width = (int?)result["width"] ?? 0; Height = (int?)result["height"] ?? 0;
-        Layout = result["layout"] as JObject;
-        string format = (string)result["frameFormat"] ?? "png";
-        if (format != "png" && format != "rgba")
-            throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned an unsupported pixel format.");
-        rgba = format == "rgba";
-        directory = (string)result["frameDirectory"];
-        if (Width <= 0 || Height <= 0 || Width > 8192 || Height > 8192 || (long)Width * Height * 4 > 128 * 1024 * 1024
-            || string.IsNullOrWhiteSpace(directory) || !Path.IsPathRooted(directory))
-            throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned an invalid render surface.");
+        multiple = result["surfaces"] is JArray;
+        JArray descriptors = result["surfaces"] as JArray;
+        if (multiple && (descriptors.Count < 1 || descriptors.Count > 2 || descriptors.Any(value => value is not JObject)))
+            throw Failure("ImplDmNote returned an invalid viewer list.");
+        surfaces = multiple ? descriptors.OfType<JObject>().Select(value => new Surface(value, true)).ToArray()
+            : new[] { new Surface(result, false) };
+        if (multiple && (surfaces.Select(surface => surface.Viewer).Distinct().Count() != surfaces.Length
+            || surfaces.Select(surface => Path.GetFullPath(surface.Directory)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != surfaces.Length))
+            throw Failure("ImplDmNote returned duplicate render surfaces.");
     }
 
     public async Task ExportAlphaAsync(RecordingBundle bundle, RenderTimeline timeline, long frameCount,
         int fps, string outputFile, string ffmpeg, CancellationToken cancellation, Action<long> progress = null)
+    {
+        if (surfaces.Length != 1) throw new InvalidOperationException("Use the multi-viewer export for hand and foot overlays.");
+        await ExportAsync(bundle, timeline, frameCount, fps, new[] { outputFile }, ffmpeg, cancellation, progress).ConfigureAwait(false);
+    }
+
+    public Task<MediaOverlay[]> ExportOverlaysAsync(RecordingBundle bundle, RenderTimeline timeline, long frameCount,
+        int fps, string workDirectory, string ffmpeg, CancellationToken cancellation, Action<long> progress = null)
+        => ExportAsync(bundle, timeline, frameCount, fps,
+            surfaces.Select((surface, index) => Path.Combine(workDirectory, "dmnote-" + index + "-alpha.mkv")).ToArray(),
+            ffmpeg, cancellation, progress);
+
+    private async Task<MediaOverlay[]> ExportAsync(RecordingBundle bundle, RenderTimeline timeline, long frameCount,
+        int fps, string[] outputs, string ffmpeg, CancellationToken cancellation, Action<long> progress)
     {
         if (Volatile.Read(ref ended) != 0) throw new ObjectDisposedException(nameof(DmNoteRenderSession));
         if (frameCount <= 0 || fps <= 0) throw new ArgumentOutOfRangeException(nameof(frameCount));
@@ -47,34 +82,15 @@ internal sealed class DmNoteRenderSession : IDisposable
         using var inputs = RecordingCsvReader.ReadInputEvents(reader).GetEnumerator();
         bool hasInput = inputs.MoveNext();
         long startUs = !hasInput ? 0 : Math.Min(0, (long)Math.Floor(timeline.ReplayToOutput(inputs.Current.TimeUs)));
-        // The game's calibrated timeline becomes known after its video pass. Reset
-        // the isolated surface against the already frozen preset, keeping the gate.
+        // Calibrate both frozen surfaces together after the game's video pass.
         await bridge.CommandAsync("reset", new JObject { ["sessionId"] = id, ["initialOutputTimeUs"] = startUs - 200000 }, cancellation).ConfigureAwait(false);
-        string temporary = outputFile + ".partial-" + Guid.NewGuid().ToString("N") + ".mkv";
-        using var process = new Process { StartInfo = new ProcessStartInfo {
-            FileName = ffmpeg, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            Arguments = string.Join(" ", new[] { "-v", "error", "-f", rgba ? "rawvideo" : "image2pipe", "-framerate", fps.ToString(System.Globalization.CultureInfo.InvariantCulture) }
-                .Concat(rgba ? new[] { "-pixel_format", "rgba", "-video_size", Width + "x" + Height } : new[] { "-vcodec", "png" })
-                .Concat(new[] { "-i", "pipe:0", "-an", "-vf", "scale=" + Width + ":" + Height,
-                "-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0", "-threads", "2", "-pix_fmt", "bgra", "-frames:v", frameCount.ToString(System.Globalization.CultureInfo.InvariantCulture), temporary }).Select(ExternalProcess.Quote))
-        }};
-        var errors = new StringBuilder();
-        Task stderr = null, stdout = null;
+        var encoders = new List<DmNoteAlphaEncoder>();
+        bool complete = false;
         try {
-            if (!process.Start()) throw new InvalidOperationException("Could not start FFmpeg for ImplDmNote rendering.");
-            async Task Drain(StreamReader reader) {
-                string line;
-                while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null) {
-                    lock (errors) { errors.AppendLine(line); if (errors.Length > 8192) errors.Remove(0, errors.Length - 8192); }
-                }
+            for (int i = 0; i < surfaces.Length; i++) {
+                Surface surface = surfaces[i];
+                encoders.Add(new DmNoteAlphaEncoder(ffmpeg, outputs[i], surface.Width, surface.Height, surface.Rgba, fps, frameCount, cancellation));
             }
-            stderr = Drain(process.StandardError); stdout = Drain(process.StandardOutput);
-            using var stop = cancellation.Register(() => {
-                // Closing stdin unblocks a full pipe before waiting for the child.
-                try { process.StandardInput.Close(); } catch (Exception) { }
-                try { if (!process.HasExited) process.Kill(); } catch (Exception) { }
-            });
             for (long frame = 0; frame < frameCount; frame++) {
                 cancellation.ThrowIfCancellationRequested();
                 long outputUs = (long)Math.Round(frame * 1000000d / fps);
@@ -89,37 +105,45 @@ internal sealed class DmNoteRenderSession : IDisposable
                     ["sessionId"] = id, ["frameIndex"] = frame, ["outputTimeUs"] = outputUs,
                     ["replayTimeUs"] = (long)Math.Round(timeline.OutputToReplay(outputUs)), ["events"] = events
                 }, cancellation).ConfigureAwait(false);
-                if ((long?)result["frameIndex"] != frame || (long?)result["outputTimeUs"] != outputUs)
-                    throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote acknowledged the wrong render frame.");
-                string path = Path.GetFullPath((string)result["framePath"] ?? "");
-                string expected = Path.GetFullPath(Path.Combine(directory, rgba ? "frame.rgba" : "frame.png"));
-                if (!string.Equals(path, expected, StringComparison.OrdinalIgnoreCase))
-                    throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned a frame outside its session directory.");
-                using (var png = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true)) {
-                    if (png.Length <= 0 || png.Length > 128 * 1024 * 1024) throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned an invalid frame image.");
-                    if (rgba && png.Length != (long)Width * Height * 4)
-                        throw new DmNoteRenderException("dmnote_capture_failed", "ImplDmNote returned a truncated raw frame.");
-                    await png.CopyToAsync(process.StandardInput.BaseStream, 64 * 1024, cancellation).ConfigureAwait(false);
-                    await process.StandardInput.BaseStream.FlushAsync(cancellation).ConfigureAwait(false);
+                RequireFrame(result, frame, outputUs);
+                JArray frames = result["frames"] as JArray;
+                if (multiple && (frames == null || frames.Count != surfaces.Length || frames.Any(value => value is not JObject)))
+                    throw Failure("ImplDmNote did not return every requested hand/foot frame.");
+                for (int i = 0; i < surfaces.Length; i++) {
+                    Surface surface = surfaces[i];
+                    JObject captured = multiple ? frames[i] as JObject : result;
+                    RequireFrame(captured, frame, outputUs);
+                    if (multiple && (string)captured["viewerKind"] != surface.Viewer)
+                        throw Failure("ImplDmNote acknowledged the wrong hand/foot viewer.");
+                    string path = Path.GetFullPath((string)captured["framePath"] ?? "");
+                    string expected = Path.GetFullPath(Path.Combine(surface.Directory, surface.Rgba ? "frame.rgba" : "frame.png"));
+                    if (!string.Equals(path, expected, StringComparison.OrdinalIgnoreCase))
+                        throw Failure("ImplDmNote returned a frame outside its session directory.");
+                    using var image = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
+                    if (image.Length <= 0 || image.Length > 128 * 1024 * 1024) throw Failure("ImplDmNote returned an invalid frame image.");
+                    if (surface.Rgba && image.Length != (long)surface.Width * surface.Height * 4)
+                        throw Failure("ImplDmNote returned a truncated raw frame.");
+                    await encoders[i].WriteAsync(image, cancellation).ConfigureAwait(false);
                 }
                 progress?.Invoke(frame + 1);
             }
-            process.StandardInput.Close();
-            await Task.WhenAll(stderr, stdout, Task.Run(() => process.WaitForExit())).ConfigureAwait(false);
-            cancellation.ThrowIfCancellationRequested();
-            if (process.ExitCode != 0) throw ExternalProcess.ClassifyFailure(errors.ToString(), process.ExitCode);
-            File.Move(temporary, outputFile);
+            await Task.WhenAll(encoders.Select(encoder => encoder.CompleteAsync(cancellation))).ConfigureAwait(false);
+            complete = true;
+            return surfaces.Select((surface, i) => new MediaOverlay(outputs[i], surface.Layout)).ToArray();
         }
-        catch {
-            try { process.StandardInput.Close(); } catch (Exception) { }
-            try { if (!process.HasExited) process.Kill(); } catch (Exception) { }
-            if (stderr != null) { try { await Task.WhenAll(stderr, stdout).ConfigureAwait(false); } catch (Exception) { } }
-            if (File.Exists(temporary)) File.Delete(temporary);
-            cancellation.ThrowIfCancellationRequested();
-            throw;
+        catch { cancellation.ThrowIfCancellationRequested(); throw; }
+        finally {
+            foreach (DmNoteAlphaEncoder encoder in encoders) encoder.Dispose();
+            if (!complete) foreach (string output in outputs) if (File.Exists(output)) File.Delete(output);
         }
     }
 
+    private static void RequireFrame(JObject value, long index, long time)
+    {
+        if ((long?)value?["frameIndex"] != index || (long?)value?["outputTimeUs"] != time)
+            throw Failure("ImplDmNote acknowledged the wrong render frame.");
+    }
+    private static DmNoteRenderException Failure(string message) => new DmNoteRenderException("dmnote_capture_failed", message);
     public Task EndAsync() => Interlocked.Exchange(ref ended, 1) == 0 ? bridge.EndSessionAsync(id) : Task.CompletedTask;
     public void Dispose() { _ = EndAsync(); }
 }

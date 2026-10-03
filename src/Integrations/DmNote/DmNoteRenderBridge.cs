@@ -124,6 +124,8 @@ internal sealed class DmNoteRenderBridge : IDisposable
             if (sessionId != null) throw new DmNoteRenderException("dmnote_busy", "ImplDmNote is already rendering.");
             if (hello == null || DateTime.UtcNow - lastContact > TimeSpan.FromSeconds(8)) throw new DmNoteRenderException("dmnote_unavailable", "Start a compatible ImplDmNote app, then render again.");
             if ((bool?)hello?["nativeCapture"] != true) throw new DmNoteRenderException("dmnote_capture_failed", "This ImplDmNote build cannot capture transparent render frames. Update the app, then try again.");
+            if ((bool?)placement?["automaticPlacement"] == true && (bool?)hello?["multiViewerCapture"] != true)
+                throw new DmNoteRenderException("dmnote_protocol_unsupported", "Update ImplDmNote to the renderer build supporting both hand and foot overlays, then try again. This app can only render one viewer.");
             sessionId = id = Guid.NewGuid().ToString("N");
         }
         try {
@@ -133,6 +135,7 @@ internal sealed class DmNoteRenderBridge : IDisposable
                 ["frameFormat"] = "rgba"
             };
             if (placement != null) request.Merge(placement);
+            request["includeVisibleViewers"] = (bool?)placement?["automaticPlacement"] == true;
             JObject result = await CommandAsync("begin", request, cancellation, timeoutMs).ConfigureAwait(false);
             return new DmNoteRenderSession(this, id, result);
         }

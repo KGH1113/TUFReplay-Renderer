@@ -73,6 +73,7 @@ public static class MediaTests
             if (loudPeak > 1.1) throw new Exception("Loud microphone peak was not limited before encoding: " + loudPeak);
             await TestSelectedCodecs(directory, camera);
             await TestOptionalAudio(directory, game, microphone, timeline, mic);
+            await TestHandFootComposition(directory, game);
             await TestFailureCodes(directory);
             // A real-time input keeps the process active long enough to exercise the production cancellation path.
             using var cancellation = new CancellationTokenSource();
@@ -88,6 +89,24 @@ public static class MediaTests
             Console.WriteLine("PASS: actual FFmpeg camera timing/crop/clear, selected 10-bit/ProRes4444 alpha, mic-only/noaudio/WebM Opus, precise failure codes, duration and cancellation.");
         }
         finally { Directory.Delete(directory, true); }
+    }
+
+    private static async Task TestHandFootComposition(string directory, string game)
+    {
+        string hand = Path.Combine(directory, "hand.mkv"), foot = Path.Combine(directory, "foot.mkv");
+        foreach (var pair in new[] { (hand, "red"), (foot, "lime") })
+            await Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=" + pair.Item2 + ":s=32x24:r=30:d=1,format=rgba", "-c:v", "ffv1", pair.Item1);
+        string output = Path.Combine(directory, "hand-foot.mp4");
+        var plan = MediaCompositionPlan.Create(game, output, 320, 180, 30, 1_000_000,
+            new RenderTimeline(0, 1, null), null, null, null, null, dmnoteOverlays: new[] {
+                new MediaOverlay(hand, JObject.FromObject(new { left = .1, top = .1, scale = 1 })),
+                new MediaOverlay(foot, JObject.FromObject(new { left = .6, top = .7, scale = 1 }))
+            });
+        await ExternalProcess.Run("ffmpeg", plan.Arguments.ToArray(), CancellationToken.None);
+        byte[] pixels = await Frame(output, .2);
+        Red(pixels, 40, 25, "hand overlay at its own position");
+        Green(pixels, 200, 135, "foot overlay at its own position");
+        Black(pixels, 100, 80, "space between independent viewers");
     }
 
     private static void TestSelectedMediaPreflight(string directory)

@@ -17,7 +17,7 @@ public sealed class MediaCompositionPlan
     public static MediaCompositionPlan Create(string game, string output, int width, int height, int fps,
         double durationUs, RenderTimeline timeline, JObject webcam, string webcamPath,
         JObject microphone, string microphonePath, string dmnotePath = null, JObject dmnoteLayout = null,
-        string[] videoEncoding = null, bool captureGameAudio = true)
+        string[] videoEncoding = null, bool captureGameAudio = true, IEnumerable<MediaOverlay> dmnoteOverlays = null)
     {
         if (width <= 0 || height <= 0 || fps <= 0 || durationUs <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         var plan = new MediaCompositionPlan();
@@ -81,17 +81,20 @@ public sealed class MediaCompositionPlan
             }
             void AddBoundary(double value) { if (value > 0 && value < durationUs) boundaries.Add(value); }
         }
-        if (dmnotePath != null)
+        var notes = dmnoteOverlays ?? (dmnotePath == null ? Array.Empty<MediaOverlay>() : new[] { new MediaOverlay(dmnotePath, dmnoteLayout) });
+        int noteNumber = 0;
+        foreach (MediaOverlay note in notes)
         {
             int noteIndex = input++;
-            plan.Arguments.AddRange(new[] { "-i", dmnotePath });
-            JObject layout = dmnoteLayout ?? new JObject();
+            plan.Arguments.AddRange(new[] { "-i", note.Path });
+            JObject layout = note.Layout ?? new JObject();
             int x = (int)Math.Round(Position(layout, "left", 0) * width), y = (int)Math.Round(Position(layout, "top", 0) * height);
             double scale = (double?)layout["scale"] ?? 1;
             if (double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0 || scale > 8) throw new InvalidOperationException("Invalid ImplDmNote scale.");
-            filters.Add("[" + noteIndex + ":v]scale=iw*" + N(scale) + ":ih*" + N(scale) + "[notescaled]");
-            filters.Add("[" + video + "][notescaled]overlay=" + x + ":" + y + ":format=" + overlayFormat + ":eof_action=pass:repeatlast=0[note]");
-            video = "note";
+            string scaled = "notescaled" + noteNumber, composed = "note" + noteNumber++;
+            filters.Add("[" + noteIndex + ":v]scale=iw*" + N(scale) + ":ih*" + N(scale) + "[" + scaled + "]");
+            filters.Add("[" + video + "][" + scaled + "]overlay=" + x + ":" + y + ":format=" + overlayFormat + ":eof_action=pass:repeatlast=0[" + composed + "]");
+            video = composed;
         }
         if (microphone != null && microphonePath != null)
         {

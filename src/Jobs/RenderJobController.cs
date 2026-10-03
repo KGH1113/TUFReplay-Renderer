@@ -223,7 +223,7 @@ public sealed class RenderJobController : MonoBehaviour
                 }
             }
             finally { job.WaitingForGameFocus = false; RestoreDmNotePreparationBackground(); }
-            if (note.AutomaticPlacement && dmNoteSession.Layout == null)
+            if (note.AutomaticPlacement && !dmNoteSession.HasAutomaticLayouts)
                 throw new RenderOperationException("dmnote_capture_failed", "This ImplDmNote app cannot match the live overlay position. Update ImplDmNote or disable automaticPlacement in renderer.settings.json.");
         }
         string levelPath = bundle.ResolveLevelPath();

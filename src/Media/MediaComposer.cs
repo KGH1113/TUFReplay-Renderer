@@ -31,19 +31,20 @@ internal static class MediaComposer
                 JObject microphone = (bool?)options?["includeMicrophone"] != false ? media?["microphone"] as JObject : null;
                 string cameraPath = camera == null ? null : bundle.ResolveFile((string)camera["path"]);
                 string microphonePath = microphone == null ? null : bundle.ResolveFile((string)microphone["path"]);
-                string noteVideo = null;
-                JObject noteLayout = null;
+                MediaOverlay[] noteOverlays = Array.Empty<MediaOverlay>();
                 bool renderNote = (bool?)options?["includeDmNote"] != false && session != null;
                 double compositionStart = renderNote ? .35 : 0;
                 if (renderNote) {
-                    noteVideo = Path.Combine(workDirectory, "dmnote-alpha.mkv");
-                    await session.ExportAlphaAsync(bundle, timeline, frameCount, fps, noteVideo, ffmpeg,
+                    noteOverlays = await session.ExportOverlaysAsync(bundle, timeline, frameCount, fps, workDirectory, ffmpeg,
                         cancellation, frame => progress?.Invoke(.35 * Math.Min(1, frame / (double)frameCount))).ConfigureAwait(false);
                     var note = settings.DmNote ?? new DmNoteSettings();
-                    noteLayout = session.Layout ?? JObject.FromObject(new { left = note.Left, top = note.Top, scale = note.Scale });
+                    for (int i = 0; i < noteOverlays.Length; i++) {
+                        if (noteOverlays[i].Layout == null)
+                            noteOverlays[i] = new MediaOverlay(noteOverlays[i].Path, JObject.FromObject(new { left = note.Left, top = note.Top, scale = note.Scale }));
+                    }
                 }
                 cancellation.ThrowIfCancellationRequested();
-                if (cameraPath == null && microphonePath == null && noteVideo == null) {
+                if (cameraPath == null && microphonePath == null && noteOverlays.Length == 0) {
                     // The job workspace and final output are on the selected drive.
                     // Renaming publishes even very large raw videos without copying.
                     File.Move(gameVideo, publishedPartial);
@@ -51,7 +52,7 @@ internal static class MediaComposer
                 else {
                     var plan = MediaCompositionPlan.Create(gameVideo, encodedPartial, width, height, fps,
                         frameCount * 1e6 / fps, timeline, camera, cameraPath, microphone, microphonePath,
-                        noteVideo, noteLayout, videoEncoding, captureGameAudio);
+                        null, null, videoEncoding, captureGameAudio, noteOverlays);
                     await ExternalProcess.Run(ffmpeg, plan.Arguments.ToArray(), cancellation, line => {
                         const string key = "out_time_us=";
                         if (line.StartsWith(key, StringComparison.Ordinal)

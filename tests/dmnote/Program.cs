@@ -30,6 +30,13 @@ internal static class Program
             try { ipc.Call("dmnote.hello", new JObject { ["applicationId"] = "bad", ["protocolVersion"] = 99 }); }
             catch (DmNoteRenderException error) { rejected = error.Code == "dmnote_protocol_unsupported"; }
             Check(rejected, "Unsupported protocols need an actionable code.");
+            JObject legacy = Hello(); legacy.Remove("multiViewerCapture");
+            ipc.Call("dmnote.hello", legacy);
+            try {
+                await bridge.BeginSessionAsync(8, 8, "hand", 0, CancellationToken.None, new JObject { ["automaticPlacement"] = true });
+                throw new Exception("An old app must not silently omit the foot viewer.");
+            }
+            catch (DmNoteRenderException error) { Check(error.Code == "dmnote_protocol_unsupported" && error.Message.Contains("Update ImplDmNote"), "One-viewer apps need an actionable update message."); }
             ipc.Call("dmnote.hello", Hello()); Check(bridge.IsAvailable, "A compatible native app must become available.");
             using var app = new FakeApp(ipc, directory, image);
             Task worker = app.Run();
@@ -70,29 +77,53 @@ internal static class Program
             Check(System.Linq.Enumerable.SequenceEqual(File.ReadAllBytes(rawImage), File.ReadAllBytes(decoded)), "The raw capture stream must preserve exact RGBA pixels and alpha.");
             Check(app.Frames.Count == 4, "Raw capture still requires one exact acknowledgement per frame.");
             await session.EndAsync();
+            app.Multi = true; app.Frames.Clear();
+            session = await bridge.BeginSessionAsync(8, 8, "hand", -200000, CancellationToken.None,
+                new JObject { ["automaticPlacement"] = true });
+            Check(app.IncludeVisibleViewers, "Automatic placement must request all visible viewers even with legacy hand settings.");
+            MediaOverlay[] overlays = await session.ExportOverlaysAsync(bundle, timeline, 4, 10, directory, "ffmpeg", CancellationToken.None);
+            Check(overlays.Length == 2 && app.Frames.Count == 4, "Hand and foot must share one input stream and frame barrier.");
+            Check((double)overlays[0].Layout["left"] == .25 && (double)overlays[1].Layout["left"] == .6,
+                "Each viewer needs its own frozen live placement.");
+            foreach (MediaOverlay overlay in overlays) {
+                string pixels = overlay.Path + ".rgba";
+                await ExternalProcess.Run("ffmpeg", new[] { "-v", "error", "-i", overlay.Path, "-frames:v", "1", "-pix_fmt", "rgba", "-f", "rawvideo", pixels }, CancellationToken.None);
+                Check(System.Linq.Enumerable.SequenceEqual(File.ReadAllBytes(rawImage), File.ReadAllBytes(pixels)), "Both viewer encoders must retain exact alpha pixels.");
+            }
+            await session.EndAsync(); Check(!app.Gated, "Multi-viewer completion must release the shared input gate.");
+            app.OmitFoot = true;
+            session = await bridge.BeginSessionAsync(8, 8, "hand", 0, CancellationToken.None, new JObject { ["automaticPlacement"] = true });
+            try {
+                await session.ExportOverlaysAsync(bundle, timeline, 4, 10, directory, "ffmpeg", CancellationToken.None);
+                throw new Exception("Missing foot frames must not silently produce hand-only video.");
+            }
+            catch (DmNoteRenderException error) { Check(error.Message.Contains("every requested"), "Missing foot frames need a precise capture error."); }
+            await session.EndAsync(); app.OmitFoot = false;
+            Check(!File.Exists(overlays[0].Path) && !File.Exists(overlays[1].Path), "Failure must remove both viewer outputs.");
             session = await bridge.BeginSessionAsync(8, 8, "hand", -200000, CancellationToken.None);
             app.HangFrame = true; using var cancellation = new CancellationTokenSource();
-            Task export = session.ExportAlphaAsync(bundle, timeline, 4, 10, Path.Combine(directory, "cancelled.mkv"), "ffmpeg", cancellation.Token);
+            Task export = session.ExportOverlaysAsync(bundle, timeline, 4, 10, directory, "ffmpeg", cancellation.Token);
             await app.FrameWaiting.Task.WaitAsync(TimeSpan.FromSeconds(5)); cancellation.Cancel();
             try { await export; throw new Exception("The blocked frame should be cancelled."); } catch (OperationCanceledException) { }
             await session.EndAsync(); Check(!app.Gated, "Cancellation must release the app gate while a frame is pending.");
-            Check(System.IO.Directory.GetFiles(directory, "cancelled.mkv*").Length == 0, "Cancellation must remove incomplete alpha outputs.");
+            Check(System.IO.Directory.GetFiles(directory, "dmnote-*-alpha.mkv").Length == 0
+                && System.IO.Directory.GetFiles(directory, "dmnote-*-alpha.mkv.partial-*").Length == 0, "Cancellation must remove both incomplete alpha outputs.");
             typeof(DmNoteRenderBridge).GetField("lastContact", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(bridge, DateTime.UtcNow.AddSeconds(-9));
             Check(!bridge.IsAvailable, "An expired app heartbeat must stop being offered.");
             app.Stop(); await worker;
-            Console.WriteLine("PASS: native app discovery/ownership, exact timeline and negative inputs, bounded FFmpeg alpha stream, frame ACK, cancellation cleanup and stale availability.");
+            Console.WriteLine("PASS: native app discovery/ownership and upgrade guidance, synchronized hand/foot alpha streams and placement, missing-foot rejection, exact timeline and negative inputs, frame ACK, cancellation cleanup and stale availability.");
         }
         finally { System.IO.Directory.Delete(directory, true); }
     }
 
-    private static JObject Hello() => new JObject { ["applicationId"] = "fixture", ["protocolVersion"] = 1, ["applicationVersion"] = "test", ["nativeCapture"] = true, ["platform"] = "fixture" };
+    private static JObject Hello() => new JObject { ["applicationId"] = "fixture", ["protocolVersion"] = 1, ["applicationVersion"] = "test", ["nativeCapture"] = true, ["multiViewerCapture"] = true, ["platform"] = "fixture" };
 
     private sealed class FakeApp : IDisposable
     {
         private readonly AdofaiIpcNamespace ipc; private readonly string directory, image;
         private readonly System.Collections.Generic.HashSet<string> handled = new();
         private volatile bool stopped;
-        public bool Gated, HangFrame, Raw;
+        public bool Gated, HangFrame, Raw, Multi, IncludeVisibleViewers, OmitFoot;
         public string BeginFailure;
         public int Ends;
         public readonly JArray Frames = new();
@@ -105,12 +136,23 @@ internal static class Program
                     JObject result = new(); string method = (string)command["method"];
                     if (method == "begin") {
                         Gated = true;
+                        IncludeVisibleViewers = (bool?)command["params"]["includeVisibleViewers"] == true;
                         if (BeginFailure != null) {
                             ipc.Call("dmnote.reply", new JObject { ["applicationId"] = "fixture", ["id"] = command["id"],
                                 ["error"] = new JObject { ["code"] = "dmnote_capture_failed", ["message"] = BeginFailure } });
                             continue;
                         }
                         result = new JObject { ["width"] = 8, ["height"] = 8, ["frameDirectory"] = directory, ["frameFormat"] = Raw ? "rgba" : "png", ["layout"] = new JObject { ["left"] = .25, ["top"] = .5, ["scale"] = 1 } };
+                        if (Multi) {
+                            var surfaces = new JArray();
+                            foreach (string viewer in new[] { "hand", "foot" }) {
+                                string folder = Path.Combine(directory, viewer); System.IO.Directory.CreateDirectory(folder);
+                                var surface = (JObject)result.DeepClone(); surface["viewerKind"] = viewer; surface["frameDirectory"] = folder;
+                                surface["layout"]["left"] = viewer == "hand" ? .25 : .6;
+                                surfaces.Add(surface);
+                            }
+                            result["surfaces"] = surfaces;
+                        }
                     }
                     if (method == "end") { Ends++; Gated = false; result["ended"] = true; }
                     if (method == "frame") {
@@ -120,6 +162,16 @@ internal static class Program
                         string frameFile = Raw ? "frame.rgba" : "frame.png";
                         File.Copy(Raw ? Path.ChangeExtension(image, ".rgba") : image, Path.Combine(directory, frameFile), true);
                         result = new JObject { ["frameIndex"] = command["params"]["frameIndex"], ["outputTimeUs"] = command["params"]["outputTimeUs"], ["framePath"] = Path.Combine(directory, frameFile) };
+                        if (Multi) {
+                            var frames = new JArray();
+                            foreach (string viewer in OmitFoot ? new[] { "hand" } : new[] { "hand", "foot" }) {
+                                string path = Path.Combine(directory, viewer, frameFile);
+                                File.Copy(Raw ? Path.ChangeExtension(image, ".rgba") : image, path, true);
+                                var captured = (JObject)result.DeepClone(); captured["viewerKind"] = viewer; captured["framePath"] = path;
+                                frames.Add(captured);
+                            }
+                            result["frames"] = frames;
+                        }
                     }
                     ipc.Call("dmnote.reply", new JObject { ["applicationId"] = "fixture", ["id"] = command["id"], ["result"] = result });
                 }

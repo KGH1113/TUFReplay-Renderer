@@ -13,6 +13,7 @@
     <Compile Include="../src/Replay/ReplayEventCursor.cs" />
     <Compile Include="../src/Media/RenderTimeline.cs" />
     <Compile Include="../src/Media/MediaCompositionPlan.cs" />
+    <Compile Include="../src/Media/MediaOverlay.cs" />
     <Compile Include="../src/Media/ExternalProcess.cs" />
     <Compile Include="../src/Media/SelectedMediaFiles.cs" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
