@@ -1,0 +1,19 @@
+# JipperResourcePack native key viewer adapter
+
+The renderer adapts the installed JipperResourcePack key viewer through reflection. Its own `ProcessKeyEvent`, key binding, rain geometry and Canvas drawing continue to run. No plugin source or binary is copied into TUFReplay. The inspected installation is JipperResourcePack 1.5.2.0 with the R149 version-safety assembly.
+
+At export start, the adapter blocks new physical `OnKeyEvent` calls and suppresses queued physical `ProcessKeyEvent` calls. It puts one sentinel into the existing worker queue and waits up to two seconds for acknowledgement. This proves any native event already executing when the patches were installed has completed before counters, held keys and rain state are replaced. The worker remains parked on its existing queue throughout export; there is no per-frame wait. A failed barrier removes the sentinel, releases the patches and preserves the original persistence instance.
+
+Recorded input calls `ProcessKeyEvent` directly on the game thread. The private event contains the viewer's `KeyLabel`, native key code, DOWN/UP state and exact output time in DateTime ticks. Its `CurrentTicks` getter shares that same clock (`outputTimeUs × 10`). JALib's inspected `MainThread.Run` invokes actions immediately on the main thread. The adapter additionally updates `Key.UpdateRequestKey` and `AsyncText.Text` synchronously so a short tap's counter and visuals have completed before pixel capture. Each key mapping is cached after its first lookup. Unshifted quote/backquote aliases fill omissions in the inspected SkyHook Unity mapper.
+
+`KeyCountData.Instance` points to a new temporary object during export. Its `Save` method is suppressed. An older save task continues to hold the original object and therefore cannot serialize export counters. Original counters, selected-key capture state, held-key state, text, KPS queues and the persistence instance are restored when export ends. Existing rain objects are hidden and kept intact. Each key receives a separate temporary `RainPool`; generated export rain objects are hidden/destroyed before the original pools and trails are restored.
+
+The current recording contract normalizes input to Unity `KeyCode`. Keys that the installed SkyHook mapper cannot represent emit a warning once and do not synthesize a false native key code. Arbitrary native-only bindings and device/HID identities require a richer recording contract. A standard mapped key can still match the installed viewer's native binding through SkyHook's own native-code lookup. Full visual compatibility for unusual custom bindings remains subject to runtime verification.
+
+The production renderer builds against the installed game and Harmony assemblies. Verification reads the installed JipperResourcePack, R149 and SkyHook metadata without loading Unity or running static constructors. It checks native-event constructor parameters, private processing and clock methods, worker fields, counter persistence fields, synchronous text boundaries and rain-pool methods.
+
+```sh
+dotnet run --project tests/jipper-resourcepack-adapter/JipperAdapterTests.csproj -c Release
+```
+
+The managed fixture invokes the production prefixes through a reflection patch shim. It verifies a native event already in progress completes before the barrier, physical input stays out of the queue, short taps and exact ticks reach the viewer, counters/text are ready before capture, export does not call `Save`, cleanup restores the original state and native worker, and a stalled worker rolls back after the bounded timeout. The installed Mono detour runtime fails on this macOS .NET 10 test host with a MonoMod dyld/Span compatibility error, so this fixture does not certify Harmony detours or Unity visuals. An in-game comparison of held keys, rapid taps, hand/foot/ghost rain and KPS across pitch changes remains required before marking `RuntimeVerified` true.

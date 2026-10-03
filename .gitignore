@@ -1,0 +1,10 @@
+bin/
+obj/
+Release/
+node_modules/
+.DS_Store
+*.user
+*.suo
+/jobs/
+/renders/
+.env

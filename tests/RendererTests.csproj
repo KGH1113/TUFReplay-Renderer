@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="../src/Contracts/*.cs" />
+    <Compile Include="../src/Replay/RecordedEvents.cs" />
+    <Compile Include="../src/Replay/RecordingCsvReader.cs" />
+    <Compile Include="../src/Replay/ReplayEventCursor.cs" />
+    <Compile Include="../src/Media/RenderTimeline.cs" />
+    <Compile Include="../src/Media/MediaCompositionPlan.cs" />
+    <Compile Include="../src/Media/ExternalProcess.cs" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>

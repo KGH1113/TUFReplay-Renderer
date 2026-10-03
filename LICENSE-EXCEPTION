@@ -1,0 +1,15 @@
+TUFReplay-Renderer ADOFAI and Unity linking exception
+
+As an additional permission under section 7 of GNU GPL version 3, the copyright
+holders of TUFReplay-Renderer permit linking this program with the proprietary
+A Dance of Fire and Ice game assemblies and Unity runtime assemblies, and
+distributing the resulting program without distributing those proprietary
+assemblies. The game and Unity remain subject to their own licenses.
+
+This permission does not grant permission to redistribute game or Unity
+assemblies, or extend to other proprietary mods. TUFReplay-Renderer consumes
+recording files and communicates through the documented AdofaiIpc protocol;
+it does not link to TUFReplay or ImplResourcePack assemblies.
+
+This exception applies only to code owned by the TUFReplay-Renderer copyright
+holders. Dependencies retain their own licenses and exceptions.

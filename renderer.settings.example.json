@@ -1,0 +1,14 @@
+{
+  "NodePath": "node",
+  "DmNote": {
+    "AppPath": "/absolute/path/to/impl-resourcepack/apps/impl-dm-note",
+    "SnapshotPath": "/absolute/path/to/frozen-dmnote.json",
+    "ChromePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "ViewerKind": "hand",
+    "Width": 640,
+    "Height": 240,
+    "Left": 0.0,
+    "Top": 0.75,
+    "Scale": 1.0
+  }
+}
