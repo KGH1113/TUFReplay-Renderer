@@ -24,6 +24,9 @@ public sealed class RenderJobController : MonoBehaviour
     private RendererSettings settings;
     private RecordedReplayDriver activeDriver;
     private RendererController activeRenderer;
+    private RenderClock activeRenderClock;
+    private RendererController reservedRenderer;
+    private IDisposable replayRenderReservation;
     private Coroutine routine;
     private OptionalModClock optionalClock;
     private Task backgroundWork;
@@ -42,7 +45,8 @@ public sealed class RenderJobController : MonoBehaviour
 
     public object StartJob(JObject parameters)
     {
-        if (Busy || RendererController.Instance?.Busy == true) return Error("renderer_busy", "Another render is running. Wait for it to finish or cancel it.");
+        if (Busy || RendererController.Instance?.Busy == true || RendererController.Instance?.ReplayRenderReserved == true)
+            return Error("renderer_busy", "Another render is running. Wait for it to finish or cancel it.");
         string manifest = (string)parameters?["manifestPath"];
         if (string.IsNullOrWhiteSpace(manifest) || !File.Exists(manifest)) return Error("bundle_missing", "Export the recording before rendering it.");
         int width, height, fps;
@@ -66,7 +70,7 @@ public sealed class RenderJobController : MonoBehaviour
     {
         var job = Find(jobId);
         if (job == null) return Error("render_not_found", "This render is no longer available.");
-        if (!job.Finished) { job.Cancellation.Cancel(); if (job == active) activeRenderer?.Cancel(); }
+        if (!job.Finished) { job.Cancellation.Cancel(); if (job == active && OwnsOrbitRun) activeRenderer.Cancel(); }
         return job.Snapshot();
     }
     public object Download(string jobId)
@@ -103,15 +107,18 @@ public sealed class RenderJobController : MonoBehaviour
             yield return current;
         }
         (inner as IDisposable)?.Dispose();
-        if (activeRenderer?.Busy == true) activeRenderer.Cancel();
+        if (OwnsOrbitRun && activeRenderer.Busy) activeRenderer.Cancel();
         // Orbit owns the prepared state snapshot. Restore the original game state only after its cleanup.
-        while (activeRenderer?.Busy == true) yield return null;
+        while (OwnsOrbitRun && activeRenderer.Busy) yield return null;
         while (backgroundWork != null && !backgroundWork.IsCompleted) yield return null;
         backgroundWork = null;
         if (job.RawGameOutput != null) { try { File.Delete(job.RawGameOutput); } catch (IOException) {} }
-        activeDriver?.RestoreAfterRender();
-        optionalClock?.Dispose(); optionalClock = null;
-        activeDriver = null; activeRenderer = null;
+        try { RestoreReplayState(); }
+        catch (Exception exception) {
+            job.State = "failed";
+            job.Error = exception.GetBaseException().Message;
+            Main.Entry.Logger.Log("Render " + job.Id + ": failed during restoration " + job.Error);
+        }
         job.UpdatedAtUtc = DateTime.UtcNow;
         if (job.State != "completed") {
             try { Directory.Delete(job.WorkDirectory, true); } catch (IOException) {}
@@ -132,10 +139,16 @@ public sealed class RenderJobController : MonoBehaviour
         var bundle = preparation.GetAwaiter().GetResult();
         string levelPath = bundle.ResolveLevelPath();
         if (!File.Exists(levelPath)) throw new FileNotFoundException("The recorded level file was moved. Select the level file and export again.");
+        reservedRenderer = RendererController.Instance;
+        if (reservedRenderer == null) throw new InvalidOperationException("Enable OrbitRender before rendering the recording.");
+        replayRenderReservation = reservedRenderer.TryReserveReplayRender();
+        if (replayRenderReservation == null)
+            throw new InvalidOperationException("Another render is running. Wait for it to finish or cancel it.");
         double editorDeadline = Time.realtimeSinceStartupAsDouble + 60;
         bool requestedEditor = false;
         while (ADOBase.editor == null || !ADOBase.editor.gameObject.activeInHierarchy)
         {
+            EnsureReservedRenderer();
             if (!requestedEditor) {
                 if (scrLoader.instance != null) { scrLoader.instance.GoToLevelEditor(); requestedEditor = true; }
                 else if (ADOBase.controller != null) { ADOBase.controller.GoToLevelEditor(); requestedEditor = true; }
@@ -143,6 +156,7 @@ public sealed class RenderJobController : MonoBehaviour
             if (Time.realtimeSinceStartupAsDouble > editorDeadline) throw new TimeoutException("The level editor did not open. Open the editor and try again.");
             yield return null;
         }
+        EnsureReservedRenderer();
         var editor = ADOBase.editor;
         if (editor.playMode) editor.SwitchToEditMode();
         var previousLevel = editor.customLevel;
@@ -152,32 +166,38 @@ public sealed class RenderJobController : MonoBehaviour
         while (true)
         {
             yield return null;
+            EnsureReservedRenderer();
             editor = ADOBase.editor;
             if (editor != null && !editor.isLoading && editor.customLevel?.levelData != null && editor.floors?.Count > 1
                 && Path.GetFullPath(editor.customLevel.levelPath) == Path.GetFullPath(levelPath) && (++frames >= 5 || editor.customLevel != previousLevel)) break;
             if (Time.realtimeSinceStartupAsDouble > loadDeadline) throw new TimeoutException("The level did not finish loading. Open it in the editor and try again.");
         }
+        EnsureReservedRenderer();
         activeDriver = new RecordedReplayDriver(bundle);
         activeDriver.CompatibilityWarning += message => job.Warnings.Enqueue(message);
         optionalClock = OptionalModClock.Begin(message => job.Warnings.Enqueue(message));
         activeDriver.PrepareBeforeRender();
-        var renderer = RendererController.Instance;
-        if (renderer == null || renderer.Busy) throw new InvalidOperationException("OrbitRender is unavailable or busy.");
-        activeRenderer = renderer;
+        activeRenderer = reservedRenderer;
         activeRenderer.StartRender(new RenderRequestOptions {
             Preset = RendererPreset.Custom, Width = width, Height = height,
             TargetFps = Math.Max(240, fps), VideoFps = fps, EndDelaySeconds = 2,
             CaptureAudio = true, OpenOutputFolder = false, ShowRenderPreview = true,
             VideoCodec = VideoCodec.H264,
             BitDepth = VideoBitDepth.Eight,
-            ReplayDriver = activeDriver, CaptureCanvases = CaptureOverlays
+            ReplayDriver = activeDriver, CaptureCanvases = CaptureOverlays,
+            ReplayRenderReservation = replayRenderReservation
         });
+        activeRenderClock = activeRenderer.Clock;
+        EnsureOwnOrbitRun();
         if (!activeRenderer.Busy) throw new InvalidOperationException(activeRenderer.Message);
         job.State = "rendering";
-        while (activeRenderer.Busy) {
+        while (true) {
+            EnsureOwnOrbitRun();
+            if (!activeRenderer.Busy) break;
             job.Progress = activeRenderer.TotalFrames > 0 ? .85 * activeRenderer.CapturedFrames / activeRenderer.TotalFrames : 0;
             yield return null;
         }
+        EnsureOwnOrbitRun();
         if (activeRenderer.State == RenderState.Cancelled) throw new OperationCanceledException();
         if (activeRenderer.State != RenderState.Completed) throw new InvalidOperationException(activeRenderer.Message);
         if (!activeDriver.GameplayStartVideoTimeUs.HasValue) throw new InvalidOperationException("The replay never entered gameplay. Check the recording and level.");
@@ -186,10 +206,7 @@ public sealed class RenderJobController : MonoBehaviour
         job.RawGameOutput = gameOutput;
         string ffmpeg = activeRenderer.FFmpegPath;
         long capturedFrames = activeRenderer.CapturedFrames;
-        activeDriver.RestoreAfterRender(); // External composition does not occupy the game's timing hooks.
-        optionalClock?.Dispose(); optionalClock = null;
-        activeDriver = null;
-        activeRenderer = null;
+        RestoreReplayState(); // Release Orbit only after the original game settings and clock hooks are restored.
         job.State = "compositing";
         job.Progress = .85;
         job.Output = Path.Combine(directory, "TUFReplay-" + job.Id + ".mp4");
@@ -202,6 +219,40 @@ public sealed class RenderJobController : MonoBehaviour
         job.State = "completed";
         Directory.Delete(job.WorkDirectory, true);
         PruneJobs();
+    }
+
+    private bool OwnsOrbitRun => activeRenderer != null && activeRenderClock != null
+        && ReferenceEquals(activeRenderer.Clock, activeRenderClock);
+
+    private void EnsureOwnOrbitRun()
+    {
+        if (!OwnsOrbitRun) throw new InvalidOperationException("The render session changed. Start the recording render again.");
+    }
+
+    private void EnsureReservedRenderer()
+    {
+        if (replayRenderReservation == null || reservedRenderer == null
+            || !ReferenceEquals(RendererController.Instance, reservedRenderer)
+            || !reservedRenderer.ReplayRenderReserved || reservedRenderer.Busy)
+            throw new InvalidOperationException("OrbitRender became unavailable during preparation. Enable it and try again.");
+    }
+
+    private void RestoreReplayState()
+    {
+        try { activeDriver?.RestoreAfterRender(); }
+        finally {
+            try { optionalClock?.Dispose(); }
+            finally {
+                optionalClock = null;
+                activeDriver = null;
+                activeRenderer = null;
+                activeRenderClock = null;
+                reservedRenderer = null;
+                var reservation = replayRenderReservation;
+                replayRenderReservation = null;
+                reservation?.Dispose();
+            }
+        }
     }
 
     private static IEnumerable<Canvas> CaptureOverlays() => UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
@@ -231,21 +282,26 @@ public sealed class RenderJobController : MonoBehaviour
     public void Shutdown()
     {
         bool interruptedRoutine = routine != null;
-        if (Busy) { active.Cancellation.Cancel(); activeRenderer?.StopAndClean(); }
-        if (routine != null) StopCoroutine(routine);
-        routine = null;
-        activeDriver?.RestoreAfterRender();
-        optionalClock?.Dispose(); optionalClock = null;
-        activeDriver = null;
-        activeRenderer = null;
-        if (active != null && (interruptedRoutine || !active.Finished)) {
-            if (!active.Finished) active.State = "cancelled";
-            var interrupted = active;
-            _ = (backgroundWork ?? Task.CompletedTask).ContinueWith(_ => {
-                try { if (Directory.Exists(interrupted.WorkDirectory)) Directory.Delete(interrupted.WorkDirectory, true); } catch (IOException) {}
-                if (interrupted.Output != null) { try { File.Delete(interrupted.Output + ".partial"); } catch (IOException) {} }
-                if (interrupted.RawGameOutput != null) { try { File.Delete(interrupted.RawGameOutput); } catch (IOException) {} }
-            });
+        try {
+            if (Busy) { active?.Cancellation.Cancel(); if (OwnsOrbitRun) activeRenderer.StopAndClean(); }
+        }
+        finally {
+            try { if (routine != null) StopCoroutine(routine); }
+            finally {
+                routine = null;
+                try { RestoreReplayState(); }
+                finally {
+                    if (active != null && (interruptedRoutine || !active.Finished)) {
+                        if (!active.Finished) active.State = "cancelled";
+                        var interrupted = active;
+                        _ = (backgroundWork ?? Task.CompletedTask).ContinueWith(_ => {
+                            try { if (Directory.Exists(interrupted.WorkDirectory)) Directory.Delete(interrupted.WorkDirectory, true); } catch (IOException) {}
+                            if (interrupted.Output != null) { try { File.Delete(interrupted.Output + ".partial"); } catch (IOException) {} }
+                            if (interrupted.RawGameOutput != null) { try { File.Delete(interrupted.RawGameOutput); } catch (IOException) {} }
+                        });
+                    }
+                }
+            }
         }
     }
 }
