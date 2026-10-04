@@ -9,6 +9,6 @@
     <Compile Include="../../src/Replay/RecordingCsvReader.cs" />
     <Compile Include="../../src/Replay/RecordedEvents.cs" />
     <Compile Include="../../src/Contracts/RecordingManifest.cs" />
-    <Reference Include="Newtonsoft.Json"><HintPath>/Users/kgh/Library/Application Support/Steam/steamapps/common/A Dance of Fire and Ice/ADanceOfFireAndIce.app/Contents/Resources/Data/Managed/Newtonsoft.Json.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>$(AdofaiManaged)/Newtonsoft.Json.dll</HintPath></Reference>
   </ItemGroup>
 </Project>

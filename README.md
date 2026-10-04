@@ -28,15 +28,20 @@ Pixel capture, virtual input and animation synchronization are separate capabili
 
 ## Development
 
-Use `./scripts/run.sh` for build, tests and packaging. The engine source is included; no external OrbitRender checkout or DLL is required. Build the progress UI bundles in `TUFReplay-Renderer.Unity` before packaging, then:
+Use `./scripts/run.sh` for build, installation, tests and packaging. The workflow/task/library structure is ported from TUFReplay. The engine source is included; no external OrbitRender checkout or DLL is required. Build the progress UI bundles in `TUFReplay-Renderer.Unity` before packaging. Copy `.env.example` to `.env` when local paths differ from the macOS Steam defaults, then:
 
 ```sh
-GAME_DIR="/path/to/A Dance of Fire and Ice" ./scripts/run.sh package
-./scripts/run.sh test
-./scripts/run.sh dmnote-check
+./scripts/run.sh check
+./scripts/run.sh mod-check
+./scripts/run.sh build
+./scripts/run.sh package
 ```
 
-Build requires .NET SDK 10, the local game and installed UnityModManager/AdofaiIpc. Pure parser/timeline/media and engine tests use FFmpeg and FFprobe and do not load the game. Native desktop capture and cancellation verification are documented in the ImplDmNote integration guide. Packaging requires `Assets/{mac,win,linux}/tufreplay_renderer_ui.bundle` and copies them with the single DLL, licenses and documentation. Copy `Release/TUFReplay-Renderer` into the game's Mods folder; game assemblies and FFmpeg are excluded. See [the embedded engine contract](docs/embedded-engine.md).
+`build` validates local inputs and UI bundles, builds an optimized Release DLL, checks Unity/Mono compatibility, runs renderer and ImplDmNote regression tests, verifies installation/packaging in a temporary folder, and installs into `Mods/TUFReplay-Renderer`. Existing settings, jobs and videos are preserved. `mod-check` performs the same checks without installing; `install` copies an already built payload. `package` creates a fresh `Release/TUFReplay-Renderer.zip` from source/build artifacts and verifies the ZIP, excluding installed user data. `check` validates shell scripts. Existing `test` and `dmnote-check` commands remain available.
+
+Paths use TUFReplay's environment conventions: `ADOFAI_DIR`, `ADOFAI_MODS_DIR`, `ADOFAI_MANAGED`, `DOTNET_ROOT`, `DOTNET_EXE`, `UNITY_MOD_MANAGER_DLL`, `HARMONY_DLL` and `ADOFAI_IPC_DLL`. `GAME_DIR` remains an alias for the game folder. Renderer output overrides are `RENDERER_BUILD_DIR`, `RENDERER_INSTALL_DIR` and `RENDERER_RELEASE_DIR`; see `.env.example`.
+
+Build requires .NET SDK 10, the local game and installed UnityModManager/AdofaiIpc. Pure parser/timeline/media and engine tests use FFmpeg and FFprobe and do not load the game. Native desktop capture and cancellation verification are documented in the ImplDmNote integration guide. Packaging requires `Assets/{mac,win,linux}/tufreplay_renderer_ui.bundle` and copies them with the single DLL, licenses and documentation. Game assemblies and FFmpeg are excluded. See [the embedded engine contract](docs/embedded-engine.md).
 
 FFmpeg runs as a separate executable. Binary redistribution requires the exact build's license, configuration and verified corresponding sources. The package detects or uses a configured local FFmpeg executable and bundles no FFmpeg binary. Separate repositories do not by themselves resolve GPL linking obligations; the file/IPC boundary and absence of a TUFReplay assembly reference are intentional.
 
