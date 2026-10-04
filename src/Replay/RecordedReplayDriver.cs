@@ -250,7 +250,7 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
       SynchronizeFreeroam(hit.FreeRoamSection);
       scrPlanet planet = player.planetarySystem.chosenPlanet;
       if (planet == null || planet.currfloor == null || planet.currfloor.seqID != hit.FloorId)
-        throw new InvalidOperationException($"The recorded level no longer matches tile {hit.FloorId}. Check that the original level and required mods are installed.");
+        throw new InvalidOperationException("The recorded level no longer matches tile " + hit.FloorId + ". Check that the original level and required mods are installed.");
       bool previousAuto = RDC.auto;
       bool previousInfinite = controller.noFailInfiniteMargin;
       HitMarginLimit previousLimit = GCS.hitMarginLimit;
