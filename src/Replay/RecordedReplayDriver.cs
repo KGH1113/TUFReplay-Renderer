@@ -265,7 +265,9 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
         GCS.hitMarginLimit = HitMarginLimit.None;
         player.midspinInfiniteMargin = hit.MidspinInfiniteMargin;
         if (player.failBar != null) player.failBar.overloadCounter = hit.OverloadCounter;
-        planet.angle = hit.Angle;
+        // Angle is the signed judgment offset; CachedAngle stores the planet's
+        // absolute angle captured immediately before the original hit.
+        planet.angle = hit.CachedAngle;
         planet.cachedAngle = hit.CachedAngle;
         planet.SetTargetExitAngle(hit.TargetExitAngle);
         if (nextFloor != null) nextFloor.auto = hit.NextFloorAuto;

@@ -17,6 +17,12 @@ internal static class ReplayHooks
     Current = driver;
     try
     {
+      // A renderer owns its own replay context, so TUFReplay's ordinary replay
+      // check does not exclude editor rendering from first-run camera setup.
+      // Gate both editor play and countdown without confirming or changing the
+      // user's camera settings. This patch is removed with the recorded job.
+      Type cameraSetup = AccessTools.TypeByName("TUFReplay.Webcam.Playback.CameraFirstRunCoordinator");
+      if (cameraSetup != null) Patch(AccessTools.Method(cameraSetup, "Eligible"), nameof(SkipCameraSetup));
       foreach (var target in SuppressedMethods()) Patch(target, nameof(Suppress));
       Patch(AccessTools.Method(typeof(scrPlayer), nameof(scrPlayer.Hit)), nameof(AllowRecordedHit));
       Harmony.Patch(AccessTools.Method(typeof(scrPlayer), nameof(scrPlayer.Die)),
@@ -72,6 +78,12 @@ internal static class ReplayHooks
   }
 
   private static bool Suppress() => Current == null;
+  private static bool SkipCameraSetup(ref bool __result)
+  {
+    if (Current == null) return true;
+    __result = false;
+    return false;
+  }
   private static bool AllowRecordedHit() => Current == null || Current.ApplyingRecordedHit;
   private static bool AllowRecordedFailure() => Current == null || Current.ApplyingRecordedHit || Current.ApplyingTerminalDeath;
   private static void DeathStarted() => Current?.DeathStarted();
