@@ -247,9 +247,12 @@ namespace OrbitRender.Renderer
                     if (captureCanvas)
                     {
                         ConfigureCaptureCanvas(canvas, hudOverlayCamera ?? gameCamera.camobj);
-                        // Keep HUD pixels out of the persistent gameplay image
-                        // used as Hall of Mirrors' next-frame input.
-                        canvas.enabled = false;
+                        // Keep the UI lifecycle alive while overlays create and
+                        // recycle graphics. A disabled root is unavailable to
+                        // Graphic.CacheCanvas and can leave new meshes culled.
+                        // The dedicated layer/camera isolates HUD pixels from
+                        // gameplay feedback without disabling their canvas.
+                        canvas.enabled = true;
                     }
                     else canvas.enabled = false;
                 }
@@ -440,10 +443,17 @@ namespace OrbitRender.Renderer
                 foreach (var state in canvases)
                 {
                     if (state.Canvas == null) continue;
-                    if (state.Capture) ConfigureCaptureCanvas(state.Canvas, hudOverlayCamera ?? gameCamera.camobj);
-                    if (state.Canvas.enabled)
+                    if (state.Capture)
                     {
-                        state.Canvas.enabled = false;
+                        // New pooled graphics can appear on any simulation or
+                        // refresh frame, including frames not written to video.
+                        // Isolate them before the automatic gameplay camera pass.
+                        AssignLayerRecursively(state.Canvas.gameObject);
+                        ConfigureCaptureCanvas(state.Canvas, hudOverlayCamera ?? gameCamera.camobj);
+                    }
+                    if (state.Canvas.enabled != state.Capture)
+                    {
+                        state.Canvas.enabled = state.Capture;
                         RecordBindWrite();
                     }
                 }
@@ -503,30 +513,19 @@ namespace OrbitRender.Renderer
             Graphics.Blit(gameTarget, target);
             if (hudOverlayCamera == null) return;
 
-            try
+            SyncHudOverlayCamera();
+            foreach (var state in canvases)
             {
-                SyncHudOverlayCamera();
-                foreach (var state in canvases)
-                {
-                    if (!state.Capture || state.Canvas == null) continue;
-                    // Rain/judgment objects can be created after capture setup. Visit
-                    // only output frames and avoid allocating a Transform array.
-                    AssignLayerRecursively(state.Canvas.gameObject);
-                    ConfigureCaptureCanvas(state.Canvas, hudOverlayCamera);
-                    state.Canvas.enabled = true;
-                }
-                // Overlay graphics created while their root canvas was hidden
-                // can still lack an active canvas or completed mesh/layout rebuild.
-                // Flush Unity's normal UI callbacks after enabling the selected
-                // roots, before manually drawing this output frame.
-                Canvas.ForceUpdateCanvases();
-                hudOverlayCamera.Render();
+                if (!state.Capture || state.Canvas == null) continue;
+                AssignLayerRecursively(state.Canvas.gameObject);
+                ConfigureCaptureCanvas(state.Canvas, hudOverlayCamera);
+                state.Canvas.enabled = true;
             }
-            finally
-            {
-                foreach (var state in canvases)
-                    if (state.Capture && state.Canvas != null) state.Canvas.enabled = false;
-            }
+            // Flush the active UI's normal layout/mesh callbacks before manual
+            // camera capture. Do not toggle the root: later graphics need it
+            // during their own OnEnable and clipping/layout updates as well.
+            Canvas.ForceUpdateCanvases();
+            hudOverlayCamera.Render();
         }
 
         public void Capture(long index)
