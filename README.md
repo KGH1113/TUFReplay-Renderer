@@ -32,6 +32,8 @@ The generic Canvas compositor captures active overlay roots in the persistent Un
 
 Pixel capture, virtual input and animation synchronization are separate capabilities. The renderer reports compatibility warnings in its job status. See [the recording contract and limitations](docs/recording-bundle-v1.md); installed-mod behavior still requires an actual game render test. Arbitrary native window capture and arbitrary mod video decoders are outside the deterministic Canvas path.
 
+A shared overlay runtime is being prototyped to replace individual mod adapters with common input, video clocks and queued-work synchronization. It is currently inactive; existing render behavior and adapters remain in use. See [the proposal and validation scope](docs/shared-overlay-runtime-proposal.md) for prepared tests, pending integration and limitations.
+
 ## Development
 
 While a render is active, its presentation canvas covers the game/editor with an opaque black background. The optional live render preview fits the entire game window without cropping or stretching, with letterboxing when aspect ratios differ. Only the preview and progress/cancel panel are visible. The presentation canvas is excluded from video capture and is hidden when the job ends or is cancelled.

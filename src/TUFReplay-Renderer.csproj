@@ -24,6 +24,7 @@
     <Reference Include="$(AdofaiManaged)/Unity.Collections.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Unity.TextMeshPro.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/DOTween.dll"><Private>false</Private></Reference>
+    <Reference Include="$(AdofaiManaged)/SkyHook.Unity.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Newtonsoft.Json.dll"><Private>false</Private></Reference>
     <Reference Include="$(UnityModManagerDll)"><Private>false</Private></Reference>
     <Reference Include="$(HarmonyDll)"><Private>false</Private></Reference>
