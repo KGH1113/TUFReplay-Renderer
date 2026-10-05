@@ -8,5 +8,6 @@
     <Compile Include="../../src/Replay/ManagedInstructionReader.cs" />
     <Compile Include="../../src/Replay/OverlayRuntimeScope.cs" />
     <Compile Include="../../src/Replay/OverlayAssemblyDiscovery.cs" />
+    <Compile Include="../../src/Replay/OverlayMethodDiscovery.cs" />
   </ItemGroup>
 </Project>

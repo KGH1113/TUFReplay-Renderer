@@ -36,13 +36,11 @@ internal sealed class OptionalModClock : IDisposable
         try
         {
             runtime.Configure();
-            foreach (Assembly assembly in OverlayAssemblyDiscovery.Discover())
+            Type[] components = OverlayAssemblyDiscovery.DiscoverComponents();
+            foreach (var group in OverlayMethodDiscovery.Discover(components, typeof(SkyHook.SkyHookEvent)).GroupBy(m => m.DeclaringType.Assembly))
             {
-                Type[] types;
-                try { types = assembly.GetTypes(); }
-                catch (ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
-                foreach (Type type in types)
-                foreach (MethodInfo method in type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                Assembly assembly = group.Key;
+                foreach (MethodInfo method in group)
                 {
                     if (method.ContainsGenericParameters || method.IsAbstract || method.GetMethodBody() == null) continue;
                     MemberInfo[] members = ManagedInstructionReader.Members(method).ToArray();
@@ -52,7 +50,10 @@ internal sealed class OptionalModClock : IDisposable
                         prefix: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterConsumer)) : null,
                         transpiler: new HarmonyMethod(typeof(OptionalModClock), nameof(Rewrite)),
                         finalizer: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(LeaveConsumer)) : null); }
-                    catch (Exception e) { throw new InvalidOperationException("The overlay " + assembly.GetName().Name + " could not use replay input or time. Disable its overlay and try again. " + method.Name, e); }
+                    catch (Exception e) {
+                        Main.Entry.Logger.Error("Shared overlay patch failed: " + method.DeclaringType.FullName + "." + method.Name + "\n" + e);
+                        throw new InvalidOperationException("The overlay " + assembly.GetName().Name + " could not use replay input or time. Disable its overlay and try again. " + method.DeclaringType.Name + "." + method.Name + ": " + e.GetBaseException().Message, e);
+                    }
                 }
                 warning?.Invoke(assembly.GetName().Name + ": shared input, video clocks and managed queue tracking enabled; native workers and custom schedulers require a game comparison.");
             }
@@ -140,5 +141,11 @@ internal sealed class OptionalModClock : IDisposable
     private static int ScreenWidth() => active == null ? Screen.width : RendererController.Instance?.OverlayWidth ?? Screen.width;
     private static int ScreenHeight() => active == null ? Screen.height : RendererController.Instance?.OverlayHeight ?? Screen.height;
     private sealed class VirtualWatch { internal bool Running; internal double Started, Elapsed; }
-    public void Dispose() { harmony.UnpatchAll(harmony.Id); if (active == this) active = null; }
+    public void Dispose()
+    {
+        // Clear ownership first: a failed Harmony cleanup must never leave normal
+        // gameplay reading a stopped render clock or tracking replay queue work.
+        if (active == this) active = null;
+        harmony.UnpatchAll(harmony.Id);
+    }
 }

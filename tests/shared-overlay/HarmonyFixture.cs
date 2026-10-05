@@ -19,7 +19,7 @@ public sealed class Harmony
     public Harmony(string id) { Id = id; }
     public void Patch(MethodBase original, HarmonyMethod prefix = null, HarmonyMethod postfix = null)
     { if (prefix != null) FixturePatches.Add(Id, original, prefix.method); }
-    public void UnpatchAll(string id) { FixturePatches.Remove(id); }
+    public void UnpatchAll(string id) { if (FixturePatches.FailUnpatch) throw new InvalidOperationException("Fixture cleanup failure"); FixturePatches.Remove(id); }
 }
 public static class AccessTools
 {
@@ -31,6 +31,7 @@ public static class AccessTools
 }
 internal static class FixturePatches
 {
+    internal static bool FailUnpatch;
     private static readonly ConcurrentDictionary<string, (string owner, MethodInfo prefix)> patches = new();
     internal static void Add(string owner, MethodBase method, MethodInfo prefix) => patches[method.DeclaringType.FullName + "." + method.Name] = (owner, prefix);
     internal static void Remove(string owner) { foreach (var item in patches) if (item.Value.owner == owner) patches.TryRemove(item.Key, out _); }

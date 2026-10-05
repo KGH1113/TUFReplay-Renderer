@@ -10,8 +10,11 @@ namespace TUFReplayRenderer.Replay;
 internal static class OverlayAssemblyDiscovery
 {
     internal static Assembly[] Discover()
+        => DiscoverComponents().Select(t => t.Assembly).Distinct().ToArray();
+
+    internal static Type[] DiscoverComponents()
     {
-        var result = new HashSet<Assembly>();
+        var result = new HashSet<Type>();
         foreach (Canvas canvas in UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
             if (canvas == null || !canvas.isRootCanvas || !canvas.enabled
@@ -24,7 +27,7 @@ internal static class OverlayAssemblyDiscovery
                 string name = assembly.GetName().Name;
                 if (assembly == typeof(OverlayAssemblyDiscovery).Assembly || assembly == typeof(scrController).Assembly
                     || !OverlayRuntimeScope.AllowsAssembly(name)) continue;
-                result.Add(assembly);
+                result.Add(component.GetType());
             }
         }
         return result.ToArray();

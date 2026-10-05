@@ -39,6 +39,12 @@ screen-space overlay roots qualify; TUFReplay, IPC, Unity/mod-manager and DOTwee
 assemblies retain their own input and wall-clock behavior even if attached to a
 qualifying root. Hidden GameObjects remain discoverable for later native visibility.
 
+An eligible assembly is not patched wholesale. Method discovery starts from actual
+Canvas component types and standard shared input event consumers, then follows
+managed calls, delegates and compiler state machines within those assemblies.
+An unrelated download, encoder or service method does not become a patch target
+just because it reads Stopwatch or DateTime in the same DLL.
+
 1. Rewrite their standard Unity input and managed clock reads to the replay clock.
 2. Instrument standard managed queues at those call sites to track pending work.
 3. Emit original input times through the common SkyHook event, with physical input

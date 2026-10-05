@@ -12,12 +12,13 @@ internal static class Program
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static int Main()
     {
-        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); Decode(); Console.WriteLine("PASS: shared overlay scope excludes host services/control UI; production input lifecycle, exact event timestamps, native exclusion, restoration and IL decoding."); return 0; }
+        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); FailedCleanup(); Decode(); Console.WriteLine("PASS: shared overlay method/root scope; production input lifecycle, timestamps, native restoration even after cleanup failure and IL decoding."); return 0; }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }
     }
     private static void Scope()
     {
         OverlayDiscoveryTests.Run();
+        OverlayMethodDiscoveryTests.Run();
         foreach (string name in new[] { "TUFReplay", "AdofaiIpc", "UnityModManager", "Unity.TextMeshPro", "DOTween" })
             Check(!OverlayRuntimeScope.AllowsAssembly(name), "Host/framework assembly must retain real time: " + name);
         foreach (string name in new[] { "TUFReplay Canvas", "UnityModManager", "CameraSetupCanvas", "ReplayTimelineCanvas" })
@@ -65,6 +66,31 @@ internal static class Program
         Check(ordinary.OfType<MethodInfo>().Any(m => m.Name == "Enqueue"), "Instruction decoding must resolve constructed generic queue methods.");
         var generic = ManagedInstructionReader.Members(typeof(Program).GetMethod(nameof(GenericFixture), BindingFlags.NonPublic | BindingFlags.Static)).ToArray();
         Check(generic.OfType<MethodInfo>().Any(m => m.Name == "TryDequeue"), "Instruction decoding must resolve generic-context operands.");
+    }
+    private static void FailedCleanup()
+    {
+        var hub = SkyHook.SkyHookManager.Instance;
+        int received = 0;
+        Action<SkyHook.SkyHookEvent> listener = _ => received++;
+        SkyHook.SkyHookManager.KeyUpdated.AddListener(listener);
+        var input = new SharedOverlayInput(new RecordedReplayDriver());
+        try
+        {
+            input.Begin();
+            FixturePatches.FailUnpatch = true;
+            bool failed = false;
+            try { input.Dispose(); } catch (InvalidOperationException error) when (error.Message == "Fixture cleanup failure") { failed = true; }
+            Check(failed && !SharedOverlayInput.Active && hub.requireFocus, "Failed detour cleanup must still release replay ownership and restore focus.");
+            int previous = received;
+            hub.EmitNative();
+            Check(received == previous + 1, "Remaining prefixes must allow ordinary native events after cleanup fails.");
+        }
+        finally
+        {
+            FixturePatches.FailUnpatch = false;
+            FixturePatches.Remove("KGH1113.TUFReplayRenderer.SharedInput");
+            SkyHook.SkyHookManager.KeyUpdated.RemoveListener(listener);
+        }
     }
     private static void DecodeFixture(ConcurrentQueue<long> queue, int selector)
     {

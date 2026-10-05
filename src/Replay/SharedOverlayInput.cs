@@ -72,9 +72,10 @@ internal sealed class SharedOverlayInput : IDisposable
         NanosField.SetValue(ev, checked((uint)(ticks % TimeSpan.TicksPerSecond * 100)));
         TypeField.SetValue(ev, pressed ? SkyHook.EventType.KeyPressed : SkyHook.EventType.KeyReleased);
         LabelField.SetValue(ev, mapping.label); KeyField.SetValue(ev, mapping.native);
+        bool previousDispatch = dispatching;
         dispatching = true;
         try { using (videoClock.Work.Dispatch(seconds)) hub((SkyHookEvent)ev); }
-        finally { dispatching = false; }
+        finally { dispatching = previousDispatch; }
     }
     internal static bool Held(KeyCode code) => active == null ? Input.GetKey(code) : active.held.Contains(code);
     internal static bool Down(KeyCode code) => active == null ? Input.GetKeyDown(code) : active.down.Contains(code);
@@ -89,6 +90,13 @@ internal sealed class SharedOverlayInput : IDisposable
         disposed = true;
         if (active != this) return;
         try { foreach (var code in held.ToArray()) if (mappings.TryGetValue(code, out var mapping)) Emit(mapping, false, driver.CurrentVideoTimeUs / 1e6); }
-        finally { SkyHookManager.Instance.requireFocus = requireFocus; active = null; harmony.UnpatchAll(harmony.Id); held.Clear(); down.Clear(); up.Clear(); }
+        finally {
+            active = null;
+            try { SkyHookManager.Instance.requireFocus = requireFocus; }
+            finally {
+                try { harmony.UnpatchAll(harmony.Id); }
+                finally { held.Clear(); down.Clear(); up.Clear(); }
+            }
+        }
     }
 }
