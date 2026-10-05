@@ -259,6 +259,10 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
       try
       {
         activeHit = hit;
+        // Accepted recorded hits must not inherit live multipress penalties.
+        // Match normal replay playback before restoring the recorded hit state.
+        player.consecMultipressCounter = 0;
+        controller.multipressPenalty = false;
         RDC.auto = hit.RdcAuto;
         controller.noFailInfiniteMargin = hit.NoFailHit;
         // The resolved accepted hit is authoritative; a user's current perfect-only preference is unrelated.
