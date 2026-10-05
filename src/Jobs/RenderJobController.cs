@@ -369,19 +369,8 @@ public sealed class RenderJobController : MonoBehaviour
     private static IEnumerable<Canvas> CaptureOverlays() => UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None)
         .Where(canvas => canvas != null && canvas.isRootCanvas && canvas.enabled
             && canvas.renderMode == RenderMode.ScreenSpaceOverlay
-            && canvas.gameObject.scene.name == "DontDestroyOnLoad" && !IsControlCanvas(canvas))
+            && canvas.gameObject.scene.name == "DontDestroyOnLoad" && !OverlayAssemblyDiscovery.IsControlCanvas(canvas))
         .Concat(ReplayHitErrorMeter.CaptureCanvases()).Distinct();
-    private static bool IsControlCanvas(Canvas canvas)
-    {
-        for (Transform parent = canvas.transform; parent != null; parent = parent.parent)
-        {
-            string name = parent.name;
-            if (name.StartsWith("TUFReplay", StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith("UnityModManager", StringComparison.OrdinalIgnoreCase)
-                || name.Contains("CameraSetup") || name.Contains("ReplayTimeline")) return true;
-        }
-        return false;
-    }
     private RenderJob Find(string id) => id != null && jobs.TryGetValue(id, out var job) ? job : null;
     private static object Error(string code, string message, object details = null) => new { error = new { code, message, details } };
     private static void SetFailure(RenderJob job, Exception exception)

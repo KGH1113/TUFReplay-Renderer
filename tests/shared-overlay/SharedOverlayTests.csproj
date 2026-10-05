@@ -6,5 +6,7 @@
     <Compile Include="../../src/Replay/OverlayWorkFence.cs" />
     <Compile Include="../../src/Replay/OverlayVideoClock.cs" />
     <Compile Include="../../src/Replay/ManagedInstructionReader.cs" />
+    <Compile Include="../../src/Replay/OverlayRuntimeScope.cs" />
+    <Compile Include="../../src/Replay/OverlayAssemblyDiscovery.cs" />
   </ItemGroup>
 </Project>

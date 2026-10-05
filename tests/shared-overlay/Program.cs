@@ -12,8 +12,18 @@ internal static class Program
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static int Main()
     {
-        try { ContractMetadataTests.Run(); Lifecycle(); Decode(); Console.WriteLine("PASS: production shared input prefix lifecycle fixture: exact event timestamps, short taps, native exclusion, focus restoration and cleanup; IL instruction decoding."); return 0; }
+        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); Decode(); Console.WriteLine("PASS: shared overlay scope excludes host services/control UI; production input lifecycle, exact event timestamps, native exclusion, restoration and IL decoding."); return 0; }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }
+    }
+    private static void Scope()
+    {
+        OverlayDiscoveryTests.Run();
+        foreach (string name in new[] { "TUFReplay", "AdofaiIpc", "UnityModManager", "Unity.TextMeshPro", "DOTween" })
+            Check(!OverlayRuntimeScope.AllowsAssembly(name), "Host/framework assembly must retain real time: " + name);
+        foreach (string name in new[] { "TUFReplay Canvas", "UnityModManager", "CameraSetupCanvas", "ReplayTimelineCanvas" })
+            Check(OverlayRuntimeScope.IsControlName(name), "Control UI must be excluded from capture and virtualization: " + name);
+        foreach (string name in new[] { "JipperResourcePack", "GhostifyOverlay", "CustomOverlay" })
+            Check(OverlayRuntimeScope.AllowsAssembly(name) && !OverlayRuntimeScope.IsControlName(name), "External overlays must remain eligible: " + name);
     }
     private static void Lifecycle()
     {

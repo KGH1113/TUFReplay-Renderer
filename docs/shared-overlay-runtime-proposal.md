@@ -34,6 +34,11 @@ These tests do not prove real Unity/Harmony compatibility.
 The integration is restricted to assemblies owning persistent
 overlay canvases and standard shared APIs:
 
+Discovery uses the same control-root exclusions as pixel capture. Only enabled
+screen-space overlay roots qualify; TUFReplay, IPC, Unity/mod-manager and DOTween
+assemblies retain their own input and wall-clock behavior even if attached to a
+qualifying root. Hidden GameObjects remain discoverable for later native visibility.
+
 1. Rewrite their standard Unity input and managed clock reads to the replay clock.
 2. Instrument standard managed queues at those call sites to track pending work.
 3. Emit original input times through the common SkyHook event, with physical input

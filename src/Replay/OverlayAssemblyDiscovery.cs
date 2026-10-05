@@ -14,17 +14,25 @@ internal static class OverlayAssemblyDiscovery
         var result = new HashSet<Assembly>();
         foreach (Canvas canvas in UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
-            if (canvas == null || !canvas.isRootCanvas || canvas.gameObject.scene.name != "DontDestroyOnLoad") continue;
+            if (canvas == null || !canvas.isRootCanvas || !canvas.enabled
+                || canvas.renderMode != RenderMode.ScreenSpaceOverlay
+                || canvas.gameObject.scene.name != "DontDestroyOnLoad" || IsControlCanvas(canvas)) continue;
             foreach (MonoBehaviour component in canvas.GetComponentsInChildren<MonoBehaviour>(true))
             {
                 if (component == null) continue;
                 Assembly assembly = component.GetType().Assembly;
                 string name = assembly.GetName().Name;
                 if (assembly == typeof(OverlayAssemblyDiscovery).Assembly || assembly == typeof(scrController).Assembly
-                    || name.StartsWith("Unity", StringComparison.Ordinal) || name == "DOTween") continue;
+                    || !OverlayRuntimeScope.AllowsAssembly(name)) continue;
                 result.Add(assembly);
             }
         }
         return result.ToArray();
+    }
+    internal static bool IsControlCanvas(Canvas canvas)
+    {
+        for (Transform parent = canvas.transform; parent != null; parent = parent.parent)
+            if (OverlayRuntimeScope.IsControlName(parent.name)) return true;
+        return false;
     }
 }
