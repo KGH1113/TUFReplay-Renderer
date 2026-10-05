@@ -151,6 +151,7 @@ namespace OrbitRender.Renderer
         private readonly bool overlayActive, quadActive;
         private readonly int mainMask;
         private Camera hudOverlayCamera;
+        internal Camera OverlayCamera => hudOverlayCamera;
         private GameObject hudOverlayObject;
         private int hudLayer;
         private int hudMask;

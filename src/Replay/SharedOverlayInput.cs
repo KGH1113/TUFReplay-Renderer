@@ -21,9 +21,11 @@ internal sealed class SharedOverlayInput : IDisposable
     private static readonly FieldInfo SecondsField = AccessTools.Field(typeof(SkyHookEvent), "TimeSec"), NanosField = AccessTools.Field(typeof(SkyHookEvent), "TimeSubsecNano"),
         TypeField = AccessTools.Field(typeof(SkyHookEvent), "Type"), LabelField = AccessTools.Field(typeof(SkyHookEvent), "Label"), KeyField = AccessTools.Field(typeof(SkyHookEvent), "Key");
     private readonly DateTime epoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-    private bool dispatching;
+    [ThreadStatic] private static bool dispatching;
+    private Action<SkyHookEvent> hub;
+    private bool requireFocus;
     private bool disposed;
-    internal SharedOverlayInput(RecordedReplayDriver driver) { this.driver = driver; videoClock = new OverlayVideoClock(DateTime.UtcNow, () => driver.CurrentVideoTimeUs / 1e6); }
+    internal SharedOverlayInput(RecordedReplayDriver driver) { this.driver = driver; videoClock = OptionalModClock.Clock; }
     internal static bool Active => active != null;
     internal void Begin()
     {
@@ -31,9 +33,21 @@ internal sealed class SharedOverlayInput : IDisposable
         active = this;
         try
         {
+            var manager = SkyHookManager.Instance;
+            requireFocus = manager.requireFocus;
+            manager.requireFocus = false;
+            hub = (Action<SkyHookEvent>)Delegate.CreateDelegate(typeof(Action<SkyHookEvent>), manager, AccessTools.Method(typeof(SkyHookManager), "HookCallback"));
             harmony.Patch(AccessTools.Method(typeof(SkyHookManager), "NativeHookCallback"), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(BlockNative)) { priority = Priority.First });
             harmony.Patch(AccessTools.Method(typeof(UnityEvent<SkyHookEvent>), "Invoke"), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(AllowSharedEvent)) { priority = Priority.First });
             harmony.Patch(AccessTools.PropertyGetter(typeof(SkyHookManager), "isHookActive"), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(HookActive)));
+            // Reset start-held state through the shared event, including viewers
+            // that maintain their own physical-held cache. No mod fields touched.
+            foreach (KeyLabel label in Enum.GetValues(typeof(KeyLabel)))
+            {
+                if (label == KeyLabel.Unknown || SkyHookKeyMapper.SkyHookKeyToUnityKey(label) == KeyCode.None) continue;
+                ushort native = SkyHookKeyMapper.KeyLabelToNativeKeyCode(label);
+                Emit((label, native), false, 0);
+            }
         }
         catch { Dispose(); throw; }
     }
@@ -45,7 +59,7 @@ internal sealed class SharedOverlayInput : IDisposable
         {
             KeyLabel label = SkyHookKeyMapper.UnityKeyToSkyHookKey(code);
             ushort native = SkyHookKeyMapper.KeyLabelToNativeKeyCode(label);
-            if (native == 0) throw new InvalidOperationException("This keyboard key cannot be replayed through the game's shared input: " + code + ".");
+            if (label == KeyLabel.Unknown) throw new InvalidOperationException("This keyboard key cannot be replayed through the game's shared input: " + code + ".");
             mappings.Add(code, mapping = (label, native));
         }
         Emit(mapping, input.Down, driver.CurrentVideoTimeUs / 1e6);
@@ -59,7 +73,7 @@ internal sealed class SharedOverlayInput : IDisposable
         TypeField.SetValue(ev, pressed ? SkyHook.EventType.KeyPressed : SkyHook.EventType.KeyReleased);
         LabelField.SetValue(ev, mapping.label); KeyField.SetValue(ev, mapping.native);
         dispatching = true;
-        try { using (videoClock.Work.Dispatch(seconds)) SkyHookManager.KeyUpdated.Invoke((SkyHookEvent)ev); }
+        try { using (videoClock.Work.Dispatch(seconds)) hub((SkyHookEvent)ev); }
         finally { dispatching = false; }
     }
     internal static bool Held(KeyCode code) => active == null ? Input.GetKey(code) : active.held.Contains(code);
@@ -67,7 +81,7 @@ internal sealed class SharedOverlayInput : IDisposable
     internal static bool Up(KeyCode code) => active == null ? Input.GetKeyUp(code) : active.up.Contains(code);
     internal static bool Focused() => active != null || Application.isFocused;
     private static bool BlockNative() => active == null;
-    private static bool AllowSharedEvent(object __instance) => active == null || !ReferenceEquals(__instance, SkyHookManager.KeyUpdated) || active.dispatching;
+    private static bool AllowSharedEvent(object __instance) => active == null || !ReferenceEquals(__instance, SkyHookManager.KeyUpdated) || dispatching;
     private static bool HookActive(ref bool __result) { if (active == null) return true; __result = true; return false; }
     public void Dispose()
     {
@@ -75,6 +89,6 @@ internal sealed class SharedOverlayInput : IDisposable
         disposed = true;
         if (active != this) return;
         try { foreach (var code in held.ToArray()) if (mappings.TryGetValue(code, out var mapping)) Emit(mapping, false, driver.CurrentVideoTimeUs / 1e6); }
-        finally { active = null; harmony.UnpatchAll(harmony.Id); held.Clear(); down.Clear(); up.Clear(); }
+        finally { SkyHookManager.Instance.requireFocus = requireFocus; active = null; harmony.UnpatchAll(harmony.Id); held.Clear(); down.Clear(); up.Clear(); }
     }
 }

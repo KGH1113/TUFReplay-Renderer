@@ -1,7 +1,7 @@
 # Shared overlay runtime proposal
 
-Status: prototype only. The renderer still uses the installed mod-specific adapters.
-The shared input class is not called by the renderer. No prototype is installed.
+Status: active shared runtime. Mod-specific adapter sources remain only for historical
+regression fixtures and are excluded from the shipping assembly.
 
 ## Intended behavior
 
@@ -20,7 +20,7 @@ Between-frame taps retain distinct down/up timestamps even if delivered together
 - `OverlayWorkFence`: propagation of event timestamps through managed queues;
   a dequeued event stays pending until its consumer completes. Pending text work
   also keeps the frame from being captured.
-- `SharedOverlayInput`: dormant common SkyHook dispatch prototype, virtual held/down/up
+- `SharedOverlayInput`: common SkyHook dispatch, virtual held/down/up
   state, temporary physical-input exclusion and key releases during cleanup.
 - `OverlayAssemblyDiscovery`: candidate assemblies identified from components on
   persistent canvases rather than a hardcoded mod list.
@@ -29,14 +29,9 @@ Portable tests cover delayed workers, one-millisecond taps, fixed frame deltas,
 pending/in-flight work, text propagation, old queued work and nested time scopes.
 These tests do not prove real Unity/Harmony compatibility.
 
-## Integration requiring approval
+## Active integration
 
-Automatic approval review rejected switching the active renderer to this architecture,
-including deletion of the existing adapters and automatic Harmony rewriting of
-overlay input/clock/queue call sites. The stated concern was unknown impact on external
-mods and game execution. The broader all-game-Update suppression proposal was discarded.
-
-The remaining proposed integration is restricted to assemblies owning persistent
+The integration is restricted to assemblies owning persistent
 overlay canvases and standard shared APIs:
 
 1. Rewrite their standard Unity input and managed clock reads to the replay clock.
@@ -47,11 +42,15 @@ overlay canvases and standard shared APIs:
    `Time.timeScale = 0` and the existing renderer delta control for any extra refresh.
    Restore both on success, failure or cancellation. Do not patch all game Updates.
 5. Fail with a bounded, cancellable timeout if an overlay never settles.
-6. Remove the active mod-specific adapters after this path passes regression checks.
+6. Exclude mod-specific adapters from the runtime while retaining their regression tests.
 
 Nested consumer and exception cleanup tests are included in the portable queue kernel.
-Before activation, the clock rewriter needs reliable instruction decoding and thread-safe
-watch state, and refresh-only behavior needs validation against the game's timing paths.
+The clock rewriter uses decoded IL instructions and locked stopwatch state. Metadata
+checks inspect the actual shared input hub, event fields and platform key mapper.
+Lifecycle fixtures include macOS native key code zero, focus restoration and short taps.
+Overlay screen dimensions and screen-space projection use the selected output size
+and capture camera. Presentation reads recognize editor replay only at overlay call sites.
+Refresh-only behavior still needs actual game validation.
 Native worker code and custom task schedulers are outside this managed queue contract.
 
 Without reading individual mod counter fields, native cumulative counters and persistence

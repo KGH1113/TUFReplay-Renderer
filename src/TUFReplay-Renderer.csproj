@@ -17,6 +17,9 @@
     <AdofaiIpcDll Condition="'$(AdofaiIpcDll)' == ''">$(GameDir)/Mods/AdofaiIpc/Runtime/versions/0.4.1/AdofaiIpc.dll</AdofaiIpcDll>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Keep historical adapter sources available to their lifecycle fixtures,
+         but compile only the shared overlay runtime into the shipped mod. -->
+    <Compile Remove="Replay/OptionalModReplaySupport.cs;Replay/JipperResourcePackReplayAdapter.cs;Replay/GhostifyOverlayReplayAdapter.cs;Replay/OptionalOverlayPresentation.cs" />
     <Reference Include="$(AdofaiManaged)/UnityEngine*.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Assembly-CSharp.dll"><Private>false</Private></Reference>
     <Reference Include="$(AdofaiManaged)/Assembly-CSharp-firstpass.dll"><Private>false</Private></Reference>

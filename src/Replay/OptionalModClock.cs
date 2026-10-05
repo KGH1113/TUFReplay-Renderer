@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -11,125 +12,133 @@ using UnityEngine;
 
 namespace TUFReplayRenderer.Replay;
 
-// Only optional mod call sites are rewritten. The host's OS/process/UI clocks keep their normal semantics.
+// Only standard API call sites in assemblies owning overlay canvases are changed.
+// Host, encoder and IPC clocks stay real. No mod-specific fields/functions are used.
 internal sealed class OptionalModClock : IDisposable
 {
     private static OptionalModClock active;
-    private readonly Harmony harmony = new Harmony("KGH1113.TUFReplayRenderer.OptionalModClock");
-    private readonly Dictionary<MethodBase, MethodInfo> replacements = new Dictionary<MethodBase, MethodInfo>();
-    private readonly ConditionalWeakTable<Stopwatch, VirtualWatch> watches = new ConditionalWeakTable<Stopwatch, VirtualWatch>();
-    private readonly double unscaledOrigin = Time.unscaledTimeAsDouble;
-    private readonly double realtimeOrigin = Time.realtimeSinceStartupAsDouble;
+    private readonly Harmony harmony = new("KGH1113.TUFReplayRenderer.OptionalModClock");
+    private readonly Dictionary<MemberInfo, MethodInfo> replacements = new();
+    private readonly ConditionalWeakTable<Stopwatch, VirtualWatch> watches = new();
+    private readonly double scaledOrigin = Time.timeAsDouble, unscaledOrigin = Time.unscaledTimeAsDouble, realtimeOrigin = Time.realtimeSinceStartupAsDouble;
     private readonly long timestampOrigin = Stopwatch.GetTimestamp();
-    private readonly DateTime utcOrigin = DateTime.UtcNow;
     private readonly DateTime localOrigin = DateTime.Now;
-    private static double Seconds => ReplayHooks.Current != null ? ReplayHooks.Current.CurrentVideoTimeUs / 1e6
-        : RendererController.Instance?.Clock.Time ?? 0;
-    private static double Delta => ReplayHooks.Current?.ApplyingInputEvent == true ? 0
-        : 1d / Math.Max(1, RendererController.Instance?.Clock.Fps ?? 240);
+    private readonly OverlayVideoClock clock = new(DateTime.UtcNow, () => ReplayHooks.Current?.CurrentVideoTimeUs / 1e6 ?? RendererController.Instance?.Clock.Time ?? 0);
+    internal static OverlayVideoClock Clock => active?.clock ?? throw new InvalidOperationException("The shared overlay clock is not initialized.");
+    internal static bool Settled => active == null || active.clock.Work.IsSettled;
+    internal static long WorkRevision => active?.clock.Work.Revision ?? 0;
+    private static double Seconds => active?.clock.Seconds ?? 0;
 
     internal static OptionalModClock Begin(Action<string> warning)
     {
-        var clock = new OptionalModClock();
-        if (active != null) throw new InvalidOperationException("An optional mod render clock is already active.");
-        active = clock;
-        clock.Configure();
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies().Where(IsOverlayAssembly))
+        if (active != null) throw new InvalidOperationException("A shared overlay clock is already active.");
+        var runtime = new OptionalModClock(); active = runtime;
+        try
         {
-            Type[] types;
-            try { types = assembly.GetTypes(); }
-            catch (ReflectionTypeLoadException exception) { types = exception.Types.Where(t => t != null).ToArray(); }
-            foreach (Type type in types)
-            foreach (MethodInfo method in type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            runtime.Configure();
+            foreach (Assembly assembly in OverlayAssemblyDiscovery.Discover())
             {
-                if (method.ContainsGenericParameters || method.IsAbstract || !clock.NeedsRewrite(method)) continue;
-                try { clock.harmony.Patch(method, transpiler: new HarmonyMethod(typeof(OptionalModClock), nameof(Rewrite))); }
-                catch (Exception exception) { warning?.Invoke("Could not synchronize " + type.FullName + "." + method.Name + ": " + exception.Message); }
+                Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+                foreach (Type type in types)
+                foreach (MethodInfo method in type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                {
+                    if (method.ContainsGenericParameters || method.IsAbstract || method.GetMethodBody() == null) continue;
+                    MemberInfo[] members = ManagedInstructionReader.Members(method).ToArray();
+                    if (!members.Any(m => runtime.Replacement(m) != null)) continue;
+                    bool consumer = members.Any(m => m is MethodBase mb && mb.Name == "TryDequeue" && QueueReplacement(mb) != null);
+                    try { runtime.harmony.Patch(method,
+                        prefix: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterConsumer)) : null,
+                        transpiler: new HarmonyMethod(typeof(OptionalModClock), nameof(Rewrite)),
+                        finalizer: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(LeaveConsumer)) : null); }
+                    catch (Exception e) { throw new InvalidOperationException("The overlay " + assembly.GetName().Name + " could not use replay input or time. Disable its overlay and try again. " + method.Name, e); }
+                }
+                warning?.Invoke(assembly.GetName().Name + ": shared input, video clocks and managed queue tracking enabled; native workers and custom schedulers require a game comparison.");
             }
+            return runtime;
         }
-        return clock;
+        catch { runtime.Dispose(); throw; }
     }
-
-    private static bool IsOverlayAssembly(Assembly assembly)
-    {
-        string name = assembly.GetName().Name;
-        return name == "KeyViewer" || name == "JipperKeyViewer" || name == "JipperResourcePack"
-            || assembly.GetType("DonQuixoteOverlay.KeyViewerContents.KeyViewer") != null
-            || name.StartsWith("Overlayer", StringComparison.Ordinal) || name.StartsWith("ImplResourcePack", StringComparison.Ordinal);
-    }
-
     private void Configure()
     {
-        Add(AccessTools.PropertyGetter(typeof(Time), nameof(Time.unscaledTime)), nameof(UnscaledFloat));
-        Add(AccessTools.PropertyGetter(typeof(Time), nameof(Time.unscaledTimeAsDouble)), nameof(UnscaledDouble));
-        Add(AccessTools.PropertyGetter(typeof(Time), nameof(Time.unscaledDeltaTime)), nameof(DeltaFloat));
-        Add(AccessTools.PropertyGetter(typeof(Time), nameof(Time.realtimeSinceStartup)), nameof(RealtimeFloat));
-        Add(AccessTools.PropertyGetter(typeof(Time), nameof(Time.realtimeSinceStartupAsDouble)), nameof(RealtimeDouble));
-        Add(AccessTools.PropertyGetter(typeof(Stopwatch), nameof(Stopwatch.Elapsed)), nameof(WatchElapsed));
-        Add(AccessTools.PropertyGetter(typeof(Stopwatch), nameof(Stopwatch.ElapsedTicks)), nameof(WatchTicks));
-        Add(AccessTools.PropertyGetter(typeof(Stopwatch), nameof(Stopwatch.ElapsedMilliseconds)), nameof(WatchMilliseconds));
-        Add(AccessTools.Method(typeof(Stopwatch), nameof(Stopwatch.GetTimestamp)), nameof(Timestamp));
-        Add(AccessTools.Method(typeof(Stopwatch), nameof(Stopwatch.StartNew)), nameof(NewWatch));
-        Add(AccessTools.Method(typeof(Stopwatch), nameof(Stopwatch.Start)), nameof(StartWatch));
-        Add(AccessTools.Method(typeof(Stopwatch), nameof(Stopwatch.Stop)), nameof(StopWatch));
-        Add(AccessTools.Method(typeof(Stopwatch), nameof(Stopwatch.Reset)), nameof(ResetWatch));
-        Add(AccessTools.Method(typeof(Stopwatch), nameof(Stopwatch.Restart)), nameof(RestartWatch));
-        Add(AccessTools.PropertyGetter(typeof(DateTime), nameof(DateTime.Now)), nameof(LocalNow));
-        Add(AccessTools.PropertyGetter(typeof(DateTime), nameof(DateTime.UtcNow)), nameof(UtcNow));
-        void Add(MethodInfo original, string replacement) { if (original != null) replacements[original] = AccessTools.Method(typeof(OptionalModClock), replacement); }
+        Add(typeof(Time), "time", nameof(ScaledFloat)); Add(typeof(Time), "timeAsDouble", nameof(ScaledDouble));
+        Add(typeof(Time), "unscaledTime", nameof(UnscaledFloat)); Add(typeof(Time), "unscaledTimeAsDouble", nameof(UnscaledDouble));
+        Add(typeof(Time), "realtimeSinceStartup", nameof(RealtimeFloat)); Add(typeof(Time), "realtimeSinceStartupAsDouble", nameof(RealtimeDouble));
+        Add(typeof(Time), "deltaTime", nameof(DeltaFloat)); Add(typeof(Time), "unscaledDeltaTime", nameof(DeltaFloat));
+        Add(typeof(Time), "frameCount", nameof(FrameCount));
+        Add(typeof(Screen), "width", nameof(ScreenWidth)); Add(typeof(Screen), "height", nameof(ScreenHeight));
+        Add(typeof(Stopwatch), "Elapsed", nameof(WatchElapsed)); Add(typeof(Stopwatch), "ElapsedTicks", nameof(WatchTicks)); Add(typeof(Stopwatch), "ElapsedMilliseconds", nameof(WatchMilliseconds));
+        foreach (var pair in new[] { ("GetTimestamp", nameof(Timestamp)), ("StartNew", nameof(NewWatch)), ("Start", nameof(StartWatch)), ("Stop", nameof(StopWatch)), ("Reset", nameof(ResetWatch)), ("Restart", nameof(RestartWatch)) })
+            Register(AccessTools.Method(typeof(Stopwatch), pair.Item1, Type.EmptyTypes), typeof(OptionalModClock), pair.Item2);
+        Add(typeof(DateTime), "Now", nameof(LocalNow)); Add(typeof(DateTime), "UtcNow", nameof(UtcNow));
+        Register(AccessTools.Method(typeof(Input), "GetKey", new[] { typeof(KeyCode) }), typeof(SharedOverlayInput), nameof(SharedOverlayInput.Held));
+        Register(AccessTools.Method(typeof(Input), "GetKeyDown", new[] { typeof(KeyCode) }), typeof(SharedOverlayInput), nameof(SharedOverlayInput.Down));
+        Register(AccessTools.Method(typeof(Input), "GetKeyUp", new[] { typeof(KeyCode) }), typeof(SharedOverlayInput), nameof(SharedOverlayInput.Up));
+        Register(AccessTools.PropertyGetter(typeof(Application), "isFocused"), typeof(SharedOverlayInput), nameof(SharedOverlayInput.Focused));
+        Add(typeof(scrController), "gameworld", nameof(GameWorld)); Add(typeof(scrConductor), "isGameWorld", nameof(ConductorWorld));
+        Add(typeof(scnEditor), "playMode", nameof(EditorPlayback));
+        Register(AccessTools.Field(typeof(scrController), "gameworld"), typeof(OptionalModClock), nameof(GameWorld));
+        Register(AccessTools.Field(typeof(scnEditor), "playMode"), typeof(OptionalModClock), nameof(EditorPlayback));
+        Register(AccessTools.Method(typeof(RectTransformUtility), "WorldToScreenPoint", new[] { typeof(Camera), typeof(Vector3) }), typeof(OptionalModClock), nameof(WorldToScreen));
+        void Add(Type type, string property, string replacement) => Register(AccessTools.PropertyGetter(type, property), typeof(OptionalModClock), replacement);
     }
-
-    private bool NeedsRewrite(MethodInfo method)
+    private void Register(MemberInfo original, Type owner, string name) { if (original != null) replacements[original] = AccessTools.Method(owner, name); }
+    private MethodInfo Replacement(MemberInfo member) => replacements.TryGetValue(member, out var replacement) ? replacement : member is MethodBase method ? QueueReplacement(method) : null;
+    private static MethodInfo QueueReplacement(MethodBase method)
     {
-        byte[] il;
-        try { il = method.GetMethodBody()?.GetILAsByteArray(); } catch (Exception) { return false; }
-        if (il == null) return false;
-        // A conservative token prefilter; Harmony performs the actual instruction decoding before rewriting.
-        for (int i = 0; i + 4 < il.Length; i++)
-        {
-            if (il[i] != 0x28 && il[i] != 0x6f) continue;
-            try {
-                MethodBase target = method.Module.ResolveMethod(BitConverter.ToInt32(il, i + 1));
-                if (target != null && replacements.ContainsKey(target)) return true;
-            } catch (ArgumentException) {} catch (BadImageFormatException) {}
-        }
-        return false;
+        Type owner = method.DeclaringType;
+        if (owner?.IsGenericType != true || owner.GetGenericTypeDefinition() != typeof(ConcurrentQueue<>)) return null;
+        string name = method.Name == "Enqueue" ? nameof(Enqueue) : method.Name == "TryDequeue" ? nameof(Dequeue) : null;
+        return name == null ? null : AccessTools.Method(typeof(OptionalModClock), name).MakeGenericMethod(owner.GetGenericArguments());
     }
     private static IEnumerable<CodeInstruction> Rewrite(IEnumerable<CodeInstruction> instructions)
     {
-        foreach (CodeInstruction instruction in instructions)
+        foreach (var instruction in instructions)
         {
-            if (active != null && (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt)
-                && instruction.operand is MethodBase method && active.replacements.TryGetValue(method, out var replacement)) {
-                instruction.opcode = OpCodes.Call; instruction.operand = replacement;
-            }
+            if (active != null && (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt || instruction.opcode == OpCodes.Ldfld)
+                && instruction.operand is MemberInfo member && active.Replacement(member) is MethodInfo replacement)
+            { instruction.opcode = OpCodes.Call; instruction.operand = replacement; }
             yield return instruction;
         }
     }
-
-    private VirtualWatch State(Stopwatch watch) => watches.GetValue(watch, value => new VirtualWatch { Running = value.IsRunning, Started = Seconds });
+    private static void Enqueue<T>(ConcurrentQueue<T> queue, T item) { if (active == null) queue.Enqueue(item); else active.clock.Work.Enqueue(queue, item); }
+    private static bool Dequeue<T>(ConcurrentQueue<T> queue, out T item) => active == null ? queue.TryDequeue(out item) : active.clock.Work.TryDequeue(queue, out item);
+    private static void EnterConsumer(out IDisposable __state) => __state = active?.clock.Work.ConsumerScope();
+    private static void LeaveConsumer(IDisposable __state) => __state?.Dispose();
+    private VirtualWatch State(Stopwatch watch) => watches.GetValue(watch, value => new VirtualWatch {
+        Running = value.IsRunning, Started = 0,
+        Elapsed = Math.Max(0, value.Elapsed.TotalSeconds - (value.IsRunning ? (Stopwatch.GetTimestamp() - timestampOrigin) / (double)Stopwatch.Frequency : 0)) });
     private static double WatchSeconds(Stopwatch watch)
     {
         if (active == null) return watch.Elapsed.TotalSeconds;
-        var state = active.State(watch);
-        return state.Elapsed + (state.Running ? Math.Max(0, Seconds - state.Started) : 0);
+        var state = active.State(watch); lock (state) return state.Elapsed + (state.Running ? Math.Max(0, Seconds - state.Started) : 0);
     }
+    private static float ScaledFloat() => (float)ScaledDouble();
+    private static double ScaledDouble() => active == null ? Time.timeAsDouble : active.scaledOrigin + Seconds;
     private static float UnscaledFloat() => (float)UnscaledDouble();
     private static double UnscaledDouble() => active == null ? Time.unscaledTimeAsDouble : active.unscaledOrigin + Seconds;
     private static float RealtimeFloat() => (float)RealtimeDouble();
     private static double RealtimeDouble() => active == null ? Time.realtimeSinceStartupAsDouble : active.realtimeOrigin + Seconds;
-    private static float DeltaFloat() => active == null ? Time.unscaledDeltaTime : (float)Delta;
-    private static TimeSpan WatchElapsed(Stopwatch watch) => TimeSpan.FromTicks((long)Math.Round(WatchSeconds(watch) * TimeSpan.TicksPerSecond));
-    private static long WatchTicks(Stopwatch watch) => (long)Math.Round(WatchSeconds(watch) * Stopwatch.Frequency);
-    private static long WatchMilliseconds(Stopwatch watch) => (long)Math.Floor(WatchSeconds(watch) * 1000);
-    private static long Timestamp() => active == null ? Stopwatch.GetTimestamp() : active.timestampOrigin + (long)Math.Round(Seconds * Stopwatch.Frequency);
+    private static float DeltaFloat() => active == null ? Time.unscaledDeltaTime : (float)active.clock.Delta(Math.Max(1, RendererController.Instance?.Clock.Fps ?? 240), RendererController.OverlayRefreshOnly);
+    private static int FrameCount() => active == null ? Time.frameCount : checked((int)(RendererController.Instance?.Clock.FrameIndex ?? 0));
+    private static TimeSpan WatchElapsed(Stopwatch watch) => TimeSpan.FromTicks(checked((long)Math.Round(WatchSeconds(watch) * TimeSpan.TicksPerSecond)));
+    private static long WatchTicks(Stopwatch watch) => checked((long)Math.Round(WatchSeconds(watch) * Stopwatch.Frequency));
+    private static long WatchMilliseconds(Stopwatch watch) => checked((long)Math.Floor(WatchSeconds(watch) * 1000));
+    private static long Timestamp() => active == null ? Stopwatch.GetTimestamp() : active.timestampOrigin + checked((long)Math.Round(Seconds * Stopwatch.Frequency));
     private static DateTime LocalNow() => active == null ? DateTime.Now : active.localOrigin.AddSeconds(Seconds);
-    private static DateTime UtcNow() => active == null ? DateTime.UtcNow : active.utcOrigin.AddSeconds(Seconds);
+    private static DateTime UtcNow() => active == null ? DateTime.UtcNow : active.clock.UtcNow;
     private static Stopwatch NewWatch() { var watch = Stopwatch.StartNew(); if (active != null) active.watches.Add(watch, new VirtualWatch { Running = true, Started = Seconds }); return watch; }
-    private static void StartWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); if (!state.Running) { state.Running = true; state.Started = Seconds; } } watch.Start(); }
-    private static void StopWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); state.Elapsed = WatchSeconds(watch); state.Running = false; } watch.Stop(); }
-    private static void ResetWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); state.Elapsed = 0; state.Running = false; } watch.Reset(); }
-    private static void RestartWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); state.Elapsed = 0; state.Started = Seconds; state.Running = true; } watch.Restart(); }
-    private sealed class VirtualWatch { internal bool Running; internal double Started; internal double Elapsed; }
+    private static void StartWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); lock (state) if (!state.Running) { state.Running = true; state.Started = Seconds; } } watch.Start(); }
+    private static void StopWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); lock (state) { state.Elapsed = WatchSeconds(watch); state.Running = false; } } watch.Stop(); }
+    private static void ResetWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); lock (state) { state.Elapsed = 0; state.Running = false; } } watch.Reset(); }
+    private static void RestartWatch(Stopwatch watch) { if (active != null) { var state = active.State(watch); lock (state) { state.Elapsed = 0; state.Started = Seconds; state.Running = true; } } watch.Restart(); }
+    private static bool GameWorld(scrController controller) => ReplayHooks.Current != null || controller.gameworld;
+    private static bool ConductorWorld(scrConductor conductor) => ReplayHooks.Current != null || conductor.isGameWorld;
+    private static bool EditorPlayback(scnEditor editor) => ReplayHooks.Current != null || editor.playMode;
+    private static Vector2 WorldToScreen(Camera camera, Vector3 world) => RectTransformUtility.WorldToScreenPoint(camera != null ? camera : RendererController.Instance?.OverlayCamera, world);
+    private static int ScreenWidth() => active == null ? Screen.width : RendererController.Instance?.OverlayWidth ?? Screen.width;
+    private static int ScreenHeight() => active == null ? Screen.height : RendererController.Instance?.OverlayHeight ?? Screen.height;
+    private sealed class VirtualWatch { internal bool Running; internal double Started, Elapsed; }
     public void Dispose() { harmony.UnpatchAll(harmony.Id); if (active == this) active = null; }
 }

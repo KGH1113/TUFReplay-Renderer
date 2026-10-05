@@ -34,10 +34,15 @@ namespace OrbitRender.Renderer
         }
         public static bool ControlsTime => Instance != null && Instance.saved != null &&
             (Instance.State == RenderState.Preparing || Instance.State == RenderState.Rendering);
+        internal static bool OverlayRefreshOnly => Instance != null && Instance.overlayRefreshOnly;
+        private bool overlayRefreshOnly;
+        internal Camera OverlayCamera => capture?.OverlayCamera;
+        internal int OverlayWidth => profile?.Width ?? Screen.width;
+        internal int OverlayHeight => profile?.Height ?? Screen.height;
         // The render clock does not advance during preparation. Keep game
         // components that use a patched delta in step with it instead of
         // letting setup frames move animations ahead of output frame zero.
-        internal static float DeterministicDelta => ControlsTime && Instance.State == RenderState.Rendering
+        internal static float DeterministicDelta => !OverlayRefreshOnly && ControlsTime && Instance.State == RenderState.Rendering
             ? 1f / Instance.Clock.Fps : 0f;
         // Block game/editor input for every render phase, including encoder
         // preflight and finalization. ControlsTime is intentionally narrower
@@ -582,6 +587,37 @@ namespace OrbitRender.Renderer
                     var gameFrameStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     yield return null;
                     yield return EndOfFrame;
+                    if (replaySession != null)
+                    {
+                        float previousTimeScale = Time.timeScale;
+                        long deadline = System.Diagnostics.Stopwatch.GetTimestamp() + 2 * System.Diagnostics.Stopwatch.Frequency;
+                        overlayRefreshOnly = true;
+                        Time.timeScale = 0;
+                        try
+                        {
+                            while (true)
+                            {
+                                while (!replaySession.OverlayWorkSettled)
+                                {
+                                    if (cancellation || State != RenderState.Rendering) yield break;
+                                    if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                                        throw new InvalidOperationException("An overlay did not finish processing recorded input. Disable its overlay and try rendering again.");
+                                    yield return null;
+                                    yield return EndOfFrame;
+                                    replaySession.OverlayRefreshFrameCompleted();
+                                }
+                                long revision = replaySession.OverlayWorkRevision;
+                                if (cancellation || State != RenderState.Rendering) yield break;
+                                yield return null;
+                                yield return EndOfFrame;
+                                replaySession.OverlayRefreshFrameCompleted();
+                                if (replaySession.OverlayWorkSettled && replaySession.OverlayWorkRevision == revision) break;
+                                if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                                    throw new InvalidOperationException("An overlay kept scheduling input work and could not prepare this video frame. Disable its overlay and try again.");
+                            }
+                        }
+                        finally { overlayRefreshOnly = false; Time.timeScale = previousTimeScale; }
+                    }
                     if (level == null || (editor != null ? editor.customLevel : ADOBase.customLevel) != level || ADOBase.controller == null || ADOBase.conductor == null)
                         throw new InvalidOperationException("The level was unloaded during rendering.");
                     gameFrameTicks += System.Diagnostics.Stopwatch.GetTimestamp() - gameFrameStart;

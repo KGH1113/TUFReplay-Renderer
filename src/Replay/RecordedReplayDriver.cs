@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace TUFReplayRenderer.Replay;
 
-public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
+public sealed class RecordedReplayDriver : IRenderReplayDriver, IRenderOverlaySynchronization, IDisposable
 {
   private readonly RecordingBundle bundle;
   private readonly ReplayEventCursor cursor;
@@ -19,7 +19,10 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
   private readonly HashSet<KeyCode> heldKeys = new();
   private RenderReplayContext context;
   private GameSettingsSnapshot settings;
-  private OptionalModReplaySupport overlays;
+  private SharedOverlayInput overlays;
+  public bool OverlayWorkSettled => OptionalModClock.Settled;
+  public long OverlayWorkRevision => OptionalModClock.WorkRevision;
+  public void OverlayRefreshFrameCompleted() => overlays?.BeforeFrame();
   private RenderTimeline timeline;
   private bool prepared;
   private bool begun;
@@ -93,6 +96,8 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
       throw new InvalidOperationException("The level is not ready to render. Open the recorded level and try again.");
     settings = new GameSettingsSnapshot();
     ReplayHooks.Activate(this);
+    overlays = new SharedOverlayInput(this);
+    overlays.Begin();
     prepared = true;
     ApplyPreparedSettings();
   }
@@ -129,8 +134,6 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
     long initialOriginUs = checked(-(long)Math.Round(initialReplayUs / GameplayRate));
     timeline = new RenderTimeline(initialOriginUs, GameplayRate, bundle.Manifest.Replay.WonTimeUs);
     ReplayHitErrorMeter.Activate(this);
-    overlays = new OptionalModReplaySupport(this, warning => CompatibilityWarning?.Invoke(warning));
-    overlays.Begin();
     // Input-event effects deduplicate by the original game frame, which v1 does not store.
     if (HasInputEventEffects(ADOBase.controller))
       CompatibilityWarning?.Invoke("Custom input-event effects need runtime verification; this recording does not contain the original game frame IDs.");
@@ -155,7 +158,6 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
       if (controller.state != States.PlayerControl) {
         CurrentReplayTimeUs = checked((long)Math.Floor(timeline.OutputToReplay(currentVideoTimeUs)));
         cursor.AdvanceInputsTo(CurrentReplayTimeUs, ApplyInput);
-        overlays?.AfterFrame(frame.DeltaTime);
         return;
       }
       double recordingUs = (conductor.songposition_minusi - bundle.Manifest.Replay.GameplayStartSongPosition) * 1_000_000d;
@@ -186,7 +188,6 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IDisposable
           controller.OnLandOnPortal(controller.chosenPlanet, Portal.EndOfLevel, null);
       }
     }
-    overlays?.AfterFrame(frame.DeltaTime);
     if (timeUs >= bundle.Manifest.Replay.TerminalTimeUs)
     {
       if (!terminalReached)
