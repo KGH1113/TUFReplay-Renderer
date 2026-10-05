@@ -142,7 +142,8 @@ public static class Main
     private static void Stop()
     {
         Recommendations.RenderSystemCapabilities.Shutdown();
-        if (Jobs != null) Jobs.Shutdown();
+        try { if (Jobs != null) Jobs.Shutdown(); }
+        finally { Replay.OptionalModClock.Shutdown(); }
         folders?.Dispose(); folders = null;
         DmNote?.Dispose(); DmNote = null;
         AdofaiIpc.AdofaiIpc.UnregisterNamespace(Namespace);

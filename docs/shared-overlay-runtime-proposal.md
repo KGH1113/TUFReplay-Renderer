@@ -89,10 +89,19 @@ Harmony owner. Portable tests warm the original getter first and check both tick
 units and fixed video time; actual Unity JIT behavior still needs a game render.
 Each job binds the clock to its new replay driver before installing any overlay
 rewrites. Preparation stays at that driver's frame zero, even when the embedded
-engine still retains the previous job's final clock. Repeated-session fixtures
-exercise the production clock with warmed, persistent stopwatch accessors and
-timestamp converters across three jobs; Harmony/Unity host boundaries remain
-fixtures rather than a claim of live Mono validation.
+engine still retains the previous job's final clock. UTC and stopwatch origins
+are sampled together after local timezone initialization, and local time derives
+from that same UTC origin. The rewritten callers and copied accessors remain
+installed between jobs; only their active clock changes. Idle calls resume the
+original standard APIs, including scaled versus unscaled delta time, and mod
+shutdown removes this renderer's patches. This avoids replacing compiled Mono
+callbacks and event delegates on every render.
+Portable fixtures exercise three consecutive jobs. When standalone Mono is
+available, the normal test workflow and `./scripts/run.sh clock-check` also use
+the installed Harmony DLL and production clock/discovery/accessor code to exercise
+warmed listeners across four jobs, an early exit, an unrelated Harmony rebuild
+while idle, fixed video time and native time restoration. Unity presentation is
+still represented by host fixtures; actual game visuals require a game render.
 Lifecycle fixtures include macOS native key code zero, focus restoration and short taps.
 Overlay screen dimensions and screen-space projection use the selected output size
 and capture camera. Presentation reads recognize editor replay only at overlay call sites.

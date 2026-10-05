@@ -15,6 +15,7 @@ Commands:
   check         Validate shell scripts
   script-test   Verify install preservation and clean packaging in a temporary folder
   test          Run renderer/parser/media/engine tests
+  clock-check   Run persistent overlay clock tests in Mono with installed Harmony
   dmnote-check  Run ImplDmNote bridge and capture tests
   help          Show this help
 Paths come from .env or ADOFAI_DIR; GAME_DIR remains supported.
@@ -29,6 +30,7 @@ case "$command_name" in
   check) exec "$SCRIPTS_DIR/workflows/check-scripts.sh" ;;
   script-test) exec "$SCRIPTS_DIR/tasks/test/workflows.sh" ;;
   test) exec "$SCRIPTS_DIR/tasks/test/csharp.sh" "$@" ;;
+  clock-check) exec bash "$SCRIPTS_DIR/tasks/test/mono-overlay-clock.sh" "$@" ;;
   dmnote-check) exec "$SCRIPTS_DIR/tasks/test/dmnote.sh" "$@" ;;
   install)
     run_task "Validate renderer payload" "$SCRIPTS_DIR/tasks/validate/payload.sh"

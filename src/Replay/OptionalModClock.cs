@@ -17,13 +17,16 @@ namespace TUFReplayRenderer.Replay;
 internal sealed class OptionalModClock : IDisposable
 {
     private static OptionalModClock active;
-    private readonly Harmony harmony = new("KGH1113.TUFReplayRenderer.OptionalModClock");
-    private readonly Dictionary<MemberInfo, MethodInfo> replacements = new();
-    private OverlayQueuePlan queuePlan;
+    // Keep the interception bodies stable for cached Mono delegates and inlined
+    // callers. Only their active time source changes between jobs; outside a
+    // render every replacement falls through to the original standard API.
+    private static readonly Harmony harmony = new("KGH1113.TUFReplayRenderer.OptionalModClock");
+    private static readonly Dictionary<MemberInfo, MethodInfo> replacements = new();
+    private static OverlayQueuePlan queuePlan;
     private readonly ConditionalWeakTable<Stopwatch, VirtualWatch> watches = new();
     private readonly double scaledOrigin = Time.timeAsDouble, unscaledOrigin = Time.unscaledTimeAsDouble, realtimeOrigin = Time.realtimeSinceStartupAsDouble;
-    private readonly long timestampOrigin = Stopwatch.GetTimestamp();
-    private readonly DateTime localOrigin = DateTime.Now;
+    private readonly long timestampOrigin;
+    private readonly DateTime localOrigin;
     private readonly OverlayVideoClock clock;
     internal static OverlayVideoClock Clock => active?.clock ?? throw new InvalidOperationException("The shared overlay clock is not initialized.");
     internal static bool Settled => active == null || active.clock.Work.IsSettled;
@@ -38,7 +41,14 @@ internal sealed class OptionalModClock : IDisposable
         // before ReplayHooks.Activate, so consulting that global clock here can
         // expose the previous run's end time to warmed overlay input listeners.
         // Bind this session to its own driver from the first rewritten call.
-        clock = new OverlayVideoClock(DateTime.UtcNow, () => driver.CurrentVideoTimeUs / 1e6);
+        // Pair UTC and stopwatch origins after the other host clock reads.
+        // DateTime.Now can resolve local timezone data, leaving a measurable
+        // gap that persistent event converters retain on the next render.
+        _ = DateTime.Now;
+        timestampOrigin = Stopwatch.GetTimestamp();
+        DateTime utcOrigin = DateTime.UtcNow;
+        localOrigin = utcOrigin.ToLocalTime();
+        clock = new OverlayVideoClock(utcOrigin, () => driver.CurrentVideoTimeUs / 1e6);
     }
 
     internal static OptionalModClock Begin(RecordedReplayDriver driver, Action<string> warning)
@@ -52,9 +62,10 @@ internal sealed class OptionalModClock : IDisposable
             MethodInfo[] methods = OverlayMethodDiscovery.Discover(components, typeof(SkyHook.SkyHookEvent));
             // Rebuild tiny clock accessors at their call sites. Patching only a
             // getter cannot update copies already inlined by Unity's Mono JIT.
-            var standardClocks = runtime.replacements.Where(pair => pair.Key.DeclaringType == typeof(Time)
-                || pair.Key.DeclaringType == typeof(Stopwatch) || pair.Key.DeclaringType == typeof(DateTime))
-                .ToDictionary(pair => pair.Key, pair => pair.Value);
+            Dictionary<MemberInfo, MethodInfo> standardClocks;
+            lock (replacements) standardClocks = replacements.Where(pair => pair.Key.DeclaringType == typeof(Time)
+                || pair.Key.DeclaringType == typeof(Stopwatch) || pair.Key.DeclaringType == typeof(DateTime)
+                || pair.Value is DynamicMethod).ToDictionary(pair => pair.Key, pair => pair.Value);
             // Follow bounded inline clock-conversion chains as well: a timestamp
             // normalizer can itself be inlined into the original input listener.
             for (int depth = 0; depth < 4; depth++)
@@ -65,25 +76,27 @@ internal sealed class OptionalModClock : IDisposable
                     if (standardClocks.ContainsKey(method) || Harmony.GetPatchInfo(method)?.Owners.Count > 0) continue;
                     MethodInfo copy = OverlayClockAccessor.Create(method, standardClocks);
                     if (copy == null) continue;
-                    runtime.replacements[method] = standardClocks[method] = copy;
+                    lock (replacements) replacements[method] = copy;
+                    standardClocks[method] = copy;
                     added = true;
                 }
                 if (!added) break;
             }
-            runtime.queuePlan = new OverlayQueuePlan(methods);
-            runtime.clock.Work.HandoffQueues.UnionWith(runtime.queuePlan.Handoff);
+            queuePlan = new OverlayQueuePlan(methods);
+            runtime.clock.Work.HandoffQueues.UnionWith(queuePlan.Handoff);
             foreach (var group in methods.GroupBy(m => m.DeclaringType.Assembly))
             {
                 Assembly assembly = group.Key;
-                int patched = 0;
+                int patched = 0, reused = 0;
                 foreach (MethodInfo method in group)
                 {
                     if (method.ContainsGenericParameters || method.IsAbstract || method.GetMethodBody() == null) continue;
                     MemberInfo[] members = ManagedInstructionReader.Members(method).ToArray();
-                    bool handoff = runtime.queuePlan.Consumers.Contains(method);
-                    if (!handoff && !members.Any(m => runtime.Replacement(m) != null)) continue;
-                    bool consumer = handoff || members.Any(m => m is MethodBase mb && mb.Name == "TryDequeue" && runtime.QueueReplacement(mb) != null);
-                    try { runtime.harmony.Patch(method,
+                    bool handoff = queuePlan.Consumers.Contains(method);
+                    if (!handoff && !members.Any(m => Replacement(m) != null)) continue;
+                    if (Harmony.GetPatchInfo(method)?.Owners.Contains(harmony.Id) == true) { reused++; continue; }
+                    bool consumer = handoff || members.Any(m => m is MethodBase mb && mb.Name == "TryDequeue" && QueueReplacement(mb) != null);
+                    try { harmony.Patch(method,
                         prefix: handoff ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterHandoff)) : consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterConsumer)) : null,
                         transpiler: new HarmonyMethod(typeof(OptionalModClock), nameof(Rewrite)),
                         finalizer: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(LeaveConsumer)) : null); }
@@ -95,8 +108,9 @@ internal sealed class OptionalModClock : IDisposable
                 }
                 // Discovery details belong in developer logs, not a compatibility
                 // warning that implies named adapters or verified mod support.
-                if (patched != 0) Main.Entry.Logger.Log("Shared overlay runtime: " + assembly.GetName().Name + ", standard API call sites in " + patched
-                    + " methods, inline clock copies=" + standardClocks.Keys.Count(member => member.DeclaringType?.Assembly == assembly) + "; game visuals remain unverified.");
+                if (patched + reused != 0) Main.Entry.Logger.Log("Shared overlay runtime: " + assembly.GetName().Name + ", standard API call sites in " + (patched + reused)
+                    + " methods (new=" + patched + ", reused=" + reused + ")"
+                    + ", inline clock copies=" + standardClocks.Keys.Count(member => member.DeclaringType?.Assembly == assembly) + "; game visuals remain unverified.");
             }
             return runtime;
         }
@@ -107,7 +121,7 @@ internal sealed class OptionalModClock : IDisposable
         Add(typeof(Time), "time", nameof(ScaledFloat)); Add(typeof(Time), "timeAsDouble", nameof(ScaledDouble));
         Add(typeof(Time), "unscaledTime", nameof(UnscaledFloat)); Add(typeof(Time), "unscaledTimeAsDouble", nameof(UnscaledDouble));
         Add(typeof(Time), "realtimeSinceStartup", nameof(RealtimeFloat)); Add(typeof(Time), "realtimeSinceStartupAsDouble", nameof(RealtimeDouble));
-        Add(typeof(Time), "deltaTime", nameof(DeltaFloat)); Add(typeof(Time), "unscaledDeltaTime", nameof(DeltaFloat));
+        Add(typeof(Time), "deltaTime", nameof(ScaledDeltaFloat)); Add(typeof(Time), "unscaledDeltaTime", nameof(UnscaledDeltaFloat));
         Add(typeof(Time), "frameCount", nameof(FrameCount));
         Add(typeof(Screen), "width", nameof(ScreenWidth)); Add(typeof(Screen), "height", nameof(ScreenHeight));
         Add(typeof(Stopwatch), "Elapsed", nameof(WatchElapsed)); Add(typeof(Stopwatch), "ElapsedTicks", nameof(WatchTicks)); Add(typeof(Stopwatch), "ElapsedMilliseconds", nameof(WatchMilliseconds));
@@ -125,9 +139,14 @@ internal sealed class OptionalModClock : IDisposable
         Register(AccessTools.Method(typeof(RectTransformUtility), "WorldToScreenPoint", new[] { typeof(Camera), typeof(Vector3) }), typeof(OptionalModClock), nameof(WorldToScreen));
         void Add(Type type, string property, string replacement) => Register(AccessTools.PropertyGetter(type, property), typeof(OptionalModClock), replacement);
     }
-    private void Register(MemberInfo original, Type owner, string name) { if (original != null) replacements[original] = AccessTools.Method(owner, name); }
-    private MethodInfo Replacement(MemberInfo member) => replacements.TryGetValue(member, out var replacement) ? replacement : member is MethodBase method ? QueueReplacement(method) : null;
-    private MethodInfo QueueReplacement(MethodBase method)
+    private static void Register(MemberInfo original, Type owner, string name)
+    { if (original != null) { var replacement = AccessTools.Method(owner, name); lock (replacements) replacements[original] = replacement; } }
+    private static MethodInfo Replacement(MemberInfo member)
+    {
+        lock (replacements) if (replacements.TryGetValue(member, out var replacement)) return replacement;
+        return member is MethodBase method ? QueueReplacement(method) : null;
+    }
+    private static MethodInfo QueueReplacement(MethodBase method)
     {
         Type owner = method.DeclaringType;
         if (owner?.IsGenericType != true || owner.GetGenericTypeDefinition() != typeof(ConcurrentQueue<>)) return null;
@@ -139,8 +158,8 @@ internal sealed class OptionalModClock : IDisposable
     {
         foreach (var instruction in instructions)
         {
-            if (active != null && (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt || instruction.opcode == OpCodes.Ldfld)
-                && instruction.operand is MemberInfo member && active.Replacement(member) is MethodInfo replacement)
+            if ((instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt || instruction.opcode == OpCodes.Ldfld)
+                && instruction.operand is MemberInfo member && Replacement(member) is MethodInfo replacement)
             { instruction.opcode = OpCodes.Call; instruction.operand = replacement; }
             yield return instruction;
         }
@@ -158,17 +177,19 @@ internal sealed class OptionalModClock : IDisposable
         if (active == null) return watch.Elapsed.TotalSeconds;
         var state = active.State(watch); lock (state) return state.Elapsed + (state.Running ? Math.Max(0, Seconds - state.Started) : 0);
     }
-    private static float ScaledFloat() => (float)ScaledDouble();
+    private static float ScaledFloat() => active == null ? Time.time : (float)ScaledDouble();
     private static double ScaledDouble() => active == null ? Time.timeAsDouble : active.scaledOrigin + Seconds;
-    private static float UnscaledFloat() => (float)UnscaledDouble();
+    private static float UnscaledFloat() => active == null ? Time.unscaledTime : (float)UnscaledDouble();
     private static double UnscaledDouble() => active == null ? Time.unscaledTimeAsDouble : active.unscaledOrigin + Seconds;
-    private static float RealtimeFloat() => (float)RealtimeDouble();
+    private static float RealtimeFloat() => active == null ? Time.realtimeSinceStartup : (float)RealtimeDouble();
     private static double RealtimeDouble() => active == null ? Time.realtimeSinceStartupAsDouble : active.realtimeOrigin + Seconds;
-    private static float DeltaFloat() => active == null ? Time.unscaledDeltaTime : (float)active.clock.Delta(Math.Max(1, RendererController.Instance?.Clock.Fps ?? 240), RendererController.OverlayRefreshOnly);
+    private static float ScaledDeltaFloat() => active == null ? Time.deltaTime : VideoDelta();
+    private static float UnscaledDeltaFloat() => active == null ? Time.unscaledDeltaTime : VideoDelta();
+    private static float VideoDelta() => (float)active.clock.Delta(Math.Max(1, RendererController.Instance?.Clock.Fps ?? 240), RendererController.OverlayRefreshOnly);
     private static int FrameCount() => active == null ? Time.frameCount : checked((int)(RendererController.Instance?.Clock.FrameIndex ?? 0));
-    private static TimeSpan WatchElapsed(Stopwatch watch) => TimeSpan.FromTicks(checked((long)Math.Round(WatchSeconds(watch) * TimeSpan.TicksPerSecond)));
-    private static long WatchTicks(Stopwatch watch) => checked((long)Math.Round(WatchSeconds(watch) * Stopwatch.Frequency));
-    private static long WatchMilliseconds(Stopwatch watch) => checked((long)Math.Floor(WatchSeconds(watch) * 1000));
+    private static TimeSpan WatchElapsed(Stopwatch watch) => active == null ? watch.Elapsed : TimeSpan.FromTicks(checked((long)Math.Round(WatchSeconds(watch) * TimeSpan.TicksPerSecond)));
+    private static long WatchTicks(Stopwatch watch) => active == null ? watch.ElapsedTicks : checked((long)Math.Round(WatchSeconds(watch) * Stopwatch.Frequency));
+    private static long WatchMilliseconds(Stopwatch watch) => active == null ? watch.ElapsedMilliseconds : checked((long)Math.Floor(WatchSeconds(watch) * 1000));
     private static long Timestamp() => active == null ? Stopwatch.GetTimestamp() : active.timestampOrigin + checked((long)Math.Round(Seconds * Stopwatch.Frequency));
     private static DateTime LocalNow() => active == null ? DateTime.Now : active.localOrigin.AddSeconds(Seconds);
     private static DateTime UtcNow() => active == null ? DateTime.UtcNow : active.clock.UtcNow;
@@ -180,15 +201,23 @@ internal sealed class OptionalModClock : IDisposable
     private static bool GameWorld(scrController controller) => ReplayHooks.Current != null || controller.gameworld;
     private static bool ConductorWorld(scrConductor conductor) => ReplayHooks.Current != null || conductor.isGameWorld;
     private static bool EditorPlayback(scnEditor editor) => ReplayHooks.Current != null || editor.playMode;
-    private static Vector2 WorldToScreen(Camera camera, Vector3 world) => RectTransformUtility.WorldToScreenPoint(camera != null ? camera : RendererController.Instance?.OverlayCamera, world);
+    private static Vector2 WorldToScreen(Camera camera, Vector3 world) => RectTransformUtility.WorldToScreenPoint(
+        active == null || camera != null ? camera : RendererController.Instance?.OverlayCamera, world);
     private static int ScreenWidth() => active == null ? Screen.width : RendererController.Instance?.OverlayWidth ?? Screen.width;
     private static int ScreenHeight() => active == null ? Screen.height : RendererController.Instance?.OverlayHeight ?? Screen.height;
     private sealed class VirtualWatch { internal bool Running; internal double Started, Elapsed; }
     public void Dispose()
     {
-        // Clear ownership first: a failed Harmony cleanup must never leave normal
-        // gameplay reading a stopped render clock or tracking replay queue work.
+        // Do not unpatch/repatch the same callbacks between jobs: Mono can keep
+        // already compiled delegate/caller bodies. Clear only time ownership so
+        // those stable callbacks resume native input/time while rendering is idle.
         if (active == this) active = null;
+    }
+    internal static void Shutdown()
+    {
+        active = null;
         harmony.UnpatchAll(harmony.Id);
+        lock (replacements) replacements.Clear();
+        queuePlan = null;
     }
 }

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony"><HintPath>$(HarmonyDll)</HintPath><Private>true</Private></Reference>
+    <Compile Include="../../src/Replay/OptionalModClock.cs" />
+    <Compile Include="../../src/Replay/OverlayClockAccessor.cs" />
+    <Compile Include="../../src/Replay/OverlayVideoClock.cs" />
+    <Compile Include="../../src/Replay/OverlayWorkFence.cs" />
+    <Compile Include="../../src/Replay/OverlayQueuePlan.cs" />
+    <Compile Include="../../src/Replay/OverlayMethodDiscovery.cs" />
+    <Compile Include="../../src/Replay/ManagedInstructionReader.cs" />
+    <Compile Include="../../src/Replay/OverlayAssemblyDiscovery.cs" />
+    <Compile Include="../../src/Replay/OverlayRuntimeScope.cs" />
+  </ItemGroup>
+</Project>
