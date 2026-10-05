@@ -136,10 +136,10 @@ namespace OrbitRender
     {
         private static readonly VideoCodecDefinition H264 = new VideoCodecDefinition(
             VideoCodec.H264, "H.264 / AVC", "libx264", "h264_nvenc", "h264_qsv", "h264_amf",
-            ".mp4", "video/mp4", "aac", "320k");
+            ".mp4", "video/mp4", "aac", "320k", "h264_videotoolbox");
         private static readonly VideoCodecDefinition H265 = new VideoCodecDefinition(
             VideoCodec.H265, "H.265 / HEVC", "libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf",
-            ".mp4", "video/mp4", "aac", "320k");
+            ".mp4", "video/mp4", "aac", "320k", "hevc_videotoolbox");
         private static readonly VideoCodecDefinition VP9 = new VideoCodecDefinition(
             VideoCodec.VP9, "VP9", "libvpx-vp9", null, null, null,
             ".webm", "video/webm", "libopus", "160k");

@@ -230,6 +230,8 @@ namespace OrbitRender.Renderer
                 return "-c:v prores_videotoolbox -profile:v " + (int)proResProfile + " -allow_sw 0";
             if (normalized == "prores_ks")
                 return "-c:v prores_ks -profile:v " + (int)proResProfile + " -threads 0";
+            if (normalized == "h264_videotoolbox" || normalized == "hevc_videotoolbox")
+                return "-c:v " + normalized + " -allow_sw 0 " + rateControl;
             var tenBitHevc = string.Equals(pixelFormat, "yuv420p10le", StringComparison.Ordinal)
                 && (normalized == "libx265" || normalized == "hevc_nvenc"
                     || normalized == "hevc_qsv" || normalized == "hevc_amf");

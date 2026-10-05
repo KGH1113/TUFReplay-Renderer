@@ -9,6 +9,7 @@ public sealed class RendererSettings
 {
     public DmNoteSettings DmNote { get; set; } = new();
     public RenderOptions Defaults { get; set; } = new() { OutputDirectory = DefaultOutputDirectory() };
+    public RenderPreferences Preferences { get; set; } = new();
     public static string DefaultOutputDirectory()
     {
         string videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
@@ -30,6 +31,9 @@ public sealed class RendererSettings
         var settings = JsonConvert.DeserializeObject<RendererSettings>(File.ReadAllText(path)) ?? new RendererSettings();
         settings.Defaults ??= new RenderOptions { OutputDirectory = DefaultOutputDirectory() };
         settings.DmNote ??= new DmNoteSettings();
+        settings.Preferences ??= new RenderPreferences();
+        try { settings.Preferences.Validate(); }
+        catch (RenderOperationException) { settings.Preferences = new RenderPreferences(); }
         return settings;
     }
 }

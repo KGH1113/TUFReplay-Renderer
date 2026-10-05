@@ -16,10 +16,34 @@ namespace TUFReplayRenderer.Tests
         internal static void Run() => RunAsync().GetAwaiter().GetResult();
         private static async Task RunAsync()
         {
+            var saved = new RenderPreferences { Mode = "advanced", Quality = "low" };
+            Check(ReferenceEquals(saved, RenderPreferences.Read(null, saved)), "older clients retain the saved recommendation preference");
+            var restored = RenderPreferences.Read(new JObject { ["mode"] = "recommended", ["quality"] = "highest" }, saved);
+            Check(restored.Mode == "recommended" && restored.Quality == "highest" && saved.Mode == "advanced", "quality preferences read without mutating the prior settings");
+            foreach (JToken invalid in new JToken[] {
+                new JObject { ["mode"] = "automatic" }, new JObject { ["mode"] = "recommended", ["quality"] = "invalid" },
+                new JObject { ["mode"] = "advanced", ["quality"] = 1 }, new JValue("advanced") }) {
+                try { RenderPreferences.Read(invalid, saved); throw new Exception("Invalid render preference was accepted."); }
+                catch (RenderOperationException error) when (error.Code == "render_option_invalid") { }
+            }
             string root = Path.Combine(Path.GetTempPath(), "tuf ffmpeg IPC " + Guid.NewGuid().ToString("N"));
             string file = Path.Combine(root, "FFmpeg", "windows-x64", "ffmpeg.exe");
             Directory.CreateDirectory(Path.GetDirectoryName(file)); File.WriteAllText(file, "test executable presence");
             try {
+                int readCalls = 0;
+                using (var server = new Fixture(method => {
+                    Check(method == "media.ffmpeg.status", "capability discovery never requests installation or consent");
+                    readCalls++;
+                    return new JObject { ["Status"] = "ready", ["Path"] = file };
+                })) {
+                    TufFfmpegClient.Initialize(root, server.Url);
+                    var status = await TufFfmpegClient.ReadStatusAsync(CancellationToken.None);
+                    Check(status.Available && status.Path == file && readCalls == 1, "capability discovery accepts only the managed installation");
+                }
+                using (var server = new Fixture(method => new JObject { ["Status"] = "ready", ["Path"] = Path.Combine(root, "outside.exe") })) {
+                    TufFfmpegClient.Initialize(root, server.Url);
+                    Check(!(await TufFfmpegClient.ReadStatusAsync(CancellationToken.None)).Available, "capability discovery rejects an outside executable");
+                }
                 int calls = 0;
                 using (var server = new Fixture(method => new JObject { ["Status"] = ++calls < 3 ? "awaiting-consent" : "ready", ["Path"] = file })) {
                     TufFfmpegClient.Initialize(root, server.Url);

@@ -14,7 +14,7 @@ internal static class ContractMetadataTests
     {
         string game = Environment.GetEnvironmentVariable("GAME_DIR") ?? "/Users/kgh/Library/Application Support/Steam/steamapps/common/A Dance of Fire and Ice";
         string mod = Path.Combine(game, "Mods", "JipperResourcePack");
-        using var source = new Contract(Path.Combine(mod, "JipperResourcePack.dll"));
+        using var source = new Contract(Environment.GetEnvironmentVariable("JIPPER_RP_DLL") ?? Path.Combine(mod, "JipperResourcePack.dll"));
         const string viewer = "JipperResourcePack.KeyViewerContents.KeyViewer", key = "JipperResourcePack.KeyViewerContents.Key", text = "JipperResourcePack.Async.AsyncText", counts = "JipperResourcePack.KeyViewerContents.KeyCountData";
         source.Method(viewer + "+KeyEvent", ".ctor", "System.Void", "SkyHook.KeyLabel", "System.UInt16", "System.Boolean", "System.Int64");
         source.Method(viewer, "ProcessKeyEvent", "System.Void", viewer + "+KeyEvent");

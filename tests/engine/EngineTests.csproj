@@ -12,5 +12,7 @@
     <Compile Include="../../src/Engine/Renderer/RenderFailureCodes.cs" />
     <Compile Include="../../src/Engine/Renderer/FFmpegEncoder.cs" />
     <Compile Include="../../src/Engine/Renderer/ConcurrentAudioEncoder.cs" />
+    <Compile Include="../../src/Recommendations/EncoderCapabilityProbe.cs" />
+    <Compile Include="../../src/Media/ExternalProcess.cs" />
   </ItemGroup>
 </Project>

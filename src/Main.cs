@@ -97,23 +97,29 @@ public static class Main
     }
     private static object GetConfiguration() => new {
         defaults = Settings.Defaults.ToJson(), outputDirectory = Settings.Defaults.OutputDirectory,
+        preferences = new { mode = Settings.Preferences.Mode, quality = Settings.Preferences.Quality },
         capabilities = new {
             codecs = Enum.GetNames(typeof(OrbitRender.VideoCodec)), encoders = Enum.GetNames(typeof(OrbitRender.VideoEncoder)),
             bitDepths = new[] { 8, 10 }, proResProfiles = Enum.GetNames(typeof(OrbitRender.ProResProfile)),
             pixelFormats = new[] { "auto", "yuv420p", "yuv420p10le", "yuv422p10le", "yuva444p10le", "p210le", "bgra" }
-        }, engineOptions = EmbeddedRenderEngine.GetOptions(), ffmpeg = FfmpegSnapshot(), dmNote = DmNote.GetAvailability()
+        }, engineOptions = EmbeddedRenderEngine.GetOptions(), ffmpeg = FfmpegSnapshot(), dmNote = DmNote.GetAvailability(),
+        system = Recommendations.RenderSystemCapabilities.Snapshot()
     };
     private static object UpdateSettings(JObject parameters)
     {
         if (Jobs.Busy) throw new RenderOperationException("renderer_busy", "Wait for the render to finish before changing its settings.");
         RenderOptions options = RenderOptions.Read(parameters, Settings.Defaults);
+        RenderPreferences preferences = RenderPreferences.Read(parameters?["preferences"], Settings.Preferences);
         options.OutputDirectory = OutputDirectoryService.ValidateWritable(options.OutputDirectory);
         ValidateEncoding(options);
         RenderOptions previous = Settings.Defaults;
+        RenderPreferences previousPreferences = Settings.Preferences;
         Settings.Defaults = options;
+        Settings.Preferences = preferences;
         try { Settings.Save(Entry.Path); }
         catch (Exception error) when (error is System.IO.IOException || error is UnauthorizedAccessException) {
             Settings.Defaults = previous;
+            Settings.Preferences = previousPreferences;
             throw new RenderOperationException("renderer_preferences_unwritable", "The render settings could not be saved. Check write permission for the renderer mod folder.", null, error);
         }
         EmbeddedRenderEngine.Configure(null, options.OutputDirectory);
@@ -134,6 +140,7 @@ public static class Main
     private static bool Unload(UnityModManager.ModEntry entry) { Stop(); return true; }
     private static void Stop()
     {
+        Recommendations.RenderSystemCapabilities.Shutdown();
         if (Jobs != null) Jobs.Shutdown();
         folders?.Dispose(); folders = null;
         DmNote?.Dispose(); DmNote = null;

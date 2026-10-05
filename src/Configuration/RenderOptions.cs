@@ -75,7 +75,7 @@ public sealed class RenderOptions
         bool apple = UnityEngine.Application.platform == UnityEngine.RuntimePlatform.OSXPlayer || UnityEngine.Application.platform == UnityEngine.RuntimePlatform.OSXEditor;
         bool encoderSupported = codec == OrbitRender.VideoCodec.VP9 ? encoder == VideoEncoder.Software
             : codec == OrbitRender.VideoCodec.ProRes ? encoder == VideoEncoder.Software || (apple && (encoder == VideoEncoder.Auto || encoder == VideoEncoder.AppleVideoToolbox))
-            : encoder != VideoEncoder.AppleVideoToolbox;
+            : encoder != VideoEncoder.AppleVideoToolbox || (apple && (codec == OrbitRender.VideoCodec.H264 || codec == OrbitRender.VideoCodec.H265));
         if (!encoderSupported) Invalid("encoder", "The selected encoder does not support this codec. Choose an encoder offered for this codec.");
         Choice<EncoderSpeed>(Encoding, "encoding"); Choice<OrbitRender.ProResProfile>(ProResProfile, "proResProfile");
         if (Crf.HasValue) {

@@ -121,7 +121,9 @@ public static class EmbeddedRenderEngine
                 var definition = VideoCodecCatalog.Get(codec);
                 string[] encoders = codec == VideoCodec.VP9 ? new[] { "Software" }
                     : codec == VideoCodec.ProRes ? (mac ? new[] { "Auto", "Software", "AppleVideoToolbox" } : new[] { "Software" })
-                    : new[] { "Auto", "Software", "NvidiaNvenc", "IntelQsv", "AmdAmf" };
+                    : mac && (codec == VideoCodec.H264 || codec == VideoCodec.H265)
+                        ? new[] { "Auto", "Software", "AppleVideoToolbox" }
+                        : new[] { "Auto", "Software", "NvidiaNvenc", "IntelQsv", "AmdAmf" };
                 return new { value = codec.ToString(), label = definition.DisplayName, extension = definition.ContainerExtension,
                     mimeType = definition.MimeType, encoders,
                     pixelFormats = codec == VideoCodec.ProRes ? new[] { "yuv422p10le", "yuva444p10le", "p210le", "bgra" } : new[] { "yuv420p", "yuv420p10le" },

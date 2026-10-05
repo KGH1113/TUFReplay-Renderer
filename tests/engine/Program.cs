@@ -26,6 +26,36 @@ internal static class Program
         Assert(Math.Abs((negative.SourceStartDsp - negative.ConductorStartDsp) * 2 + 5 - 7) < 1e-9,
             "Delaying a negative seek shifted the chart clock.");
     }
+    static void TestRecommendedEncoders(string ffmpeg)
+    {
+        var mac = TUFReplayRenderer.Recommendations.EncoderCapabilityProbe.Candidates("macos", "Apple M4", "Apple M4");
+        Assert(mac.SequenceEqual(new[] { "AppleVideoToolbox" }), "macOS candidates must use its native encoder.");
+        var hybrid = TUFReplayRenderer.Recommendations.EncoderCapabilityProbe.Candidates("windows", "NVIDIA RTX", "Intel Core i7");
+        Assert(hybrid.SequenceEqual(new[] { "NvidiaNvenc", "IntelQsv" }), "Prefer the game's GPU, then try the integrated Intel encoder.");
+        Assert(TUFReplayRenderer.Recommendations.EncoderCapabilityProbe.Candidates("linux", "unknown", "unknown").Length == 0,
+            "Unknown hardware must not guess an accelerator.");
+        foreach (var item in new[] { (VideoCodec.H264, "h264_videotoolbox"), (VideoCodec.H265, "hevc_videotoolbox") })
+        {
+            Assert(VideoCodecCatalog.Get(item.Item1).ResolveEncoder(VideoEncoder.AppleVideoToolbox, false, false, false) == item.Item2,
+                "Apple encoder mapping was lost.");
+            var arguments = string.Join(" ", FFmpegEncoder.BuildVideoEncodingArguments(item.Item2, "veryfast", 18, "yuv420p", ProResProfile.HQ, null));
+            Assert(arguments.Contains("-allow_sw 0") && !arguments.Contains("-preset"), "VideoToolbox must enforce hardware without x264 preset flags.");
+        }
+        var probeArguments = TUFReplayRenderer.Recommendations.EncoderCapabilityProbe.Arguments("Software");
+        Assert(probeArguments.Contains("libx264") && probeArguments.Contains("yuv420p"), "Probe must test the output's actual pixel format.");
+        TUFReplayRenderer.Media.ExternalProcess.Run(ffmpeg, probeArguments, CancellationToken.None).GetAwaiter().GetResult();
+        var fallback = TUFReplayRenderer.Recommendations.EncoderCapabilityProbe.ProbeAsync(ffmpeg, new[] { "Unsupported" }, CancellationToken.None).GetAwaiter().GetResult();
+        Assert(fallback.SequenceEqual(new[] { "Software" }), "A failed accelerator check must retain software encoding.");
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        try
+        {
+            TUFReplayRenderer.Recommendations.EncoderCapabilityProbe.ProbeAsync(ffmpeg, mac, cancelled.Token).GetAwaiter().GetResult();
+            throw new Exception("Cancelled recommendation probe kept running.");
+        }
+        catch (OperationCanceledException) { }
+    }
+
     static int Main(string[] args)
     {
         try
@@ -48,6 +78,7 @@ internal static class Program
             Assert(VideoCodecCatalog.Get(VideoCodec.AV1).ResolveEncoder(VideoEncoder.NvidiaNvenc, false, true, false) == "av1_nvenc", "NVIDIA NVENC mapping failed.");
             Assert(VideoCodecCatalog.Get(VideoCodec.VP9).ResolveEncoder(VideoEncoder.IntelQsv, false, true, false) == "libvpx-vp9", "VP9 software fallback failed.");
             TestProResMappings();
+            TestRecommendedEncoders(args[0]);
             TestReplayDriverLifecycle();
             TestCheckpointAudio();
             TestReplayRenderReservation();

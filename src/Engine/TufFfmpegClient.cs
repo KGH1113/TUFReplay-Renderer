@@ -58,6 +58,20 @@ internal static class TufFfmpegClient
             throw new RenderOperationException("ffmpeg_owner_unavailable", Status.Reason, null, error);
         }
     }
+    internal static async Task<EngineFfmpegStatus> ReadStatusAsync(CancellationToken cancellation)
+    {
+        if (endpoint == null || root == null) return new EngineFfmpegStatus();
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        JObject state = await CallAsync(client, "media.ffmpeg.status", cancellation).ConfigureAwait(false);
+        string path = (string)state["Path"];
+        bool ready = (string)state["Status"] == "ready" && !string.IsNullOrWhiteSpace(path)
+            && Path.IsPathRooted(path)
+            && Path.GetFullPath(path).StartsWith(root, System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+            && File.Exists(path);
+        var result = new EngineFfmpegStatus { Available = ready, Path = ready ? Path.GetFullPath(path) : null };
+        Status = result;
+        return result;
+    }
     private static async Task<JObject> CallAsync(HttpClient client, string method, CancellationToken token)
     {
         using var body = new StringContent(new JObject { ["namespace"] = "tuf-replay", ["method"] = method, ["params"] = new JObject() }.ToString(), Encoding.UTF8, "application/json");
