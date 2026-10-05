@@ -44,6 +44,7 @@ public static class Main
             EmbeddedRenderEngine.Configure(null, Settings.Defaults.OutputDirectory);
             host = new GameObject("TUFReplay-Renderer");
             UnityEngine.Object.DontDestroyOnLoad(host);
+            host.AddComponent<Replay.CommonInputDiagnostics>();
             Jobs = host.AddComponent<RenderJobController>();
             Jobs.Initialize(entry.Path, Settings);
             ProgressUi = host.AddComponent<RenderProgressView>();

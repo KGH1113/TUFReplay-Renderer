@@ -45,6 +45,15 @@ managed calls, delegates and compiler state machines within those assemblies.
 An unrelated download, encoder or service method does not become a patch target
 just because it reads Stopwatch or DateTime in the same DLL.
 
+Uninstalled optional API references are ignored during metadata discovery; this
+does not install those APIs or invoke their code. A real missing-dependency fixture
+checks that the Canvas and input paths remain discoverable without an optional DLL.
+
+`[Input/Diagnostics]` log lines passively report the common game's hook/focus state,
+render input ownership and accumulated press/release event counts. They include
+no key identities and access no external mod handlers or private state. Comparing
+these counts during ordinary playback separates OS emission from game-hub delivery.
+
 1. Rewrite their standard Unity input and managed clock reads to the replay clock.
 2. Instrument standard managed queues at those call sites to track pending work.
 3. Emit original input times through the common SkyHook event, with physical input

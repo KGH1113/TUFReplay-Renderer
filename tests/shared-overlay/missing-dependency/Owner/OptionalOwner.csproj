@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><AssemblyName>OptionalOverlayOwner</AssemblyName></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../Api/UnavailableApi.csproj" /></ItemGroup>
+</Project>

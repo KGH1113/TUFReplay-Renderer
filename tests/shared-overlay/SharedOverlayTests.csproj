@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup>
   <ItemGroup>
+    <Compile Remove="missing-dependency/**/*.cs" />
+    <ProjectReference Include="missing-dependency/Owner/OptionalOwner.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="../../src/Replay/RecordedEvents.cs" />
     <Compile Include="../../src/Replay/SharedOverlayInput.cs" />
     <Compile Include="../../src/Replay/OverlayWorkFence.cs" />
@@ -10,4 +12,7 @@
     <Compile Include="../../src/Replay/OverlayAssemblyDiscovery.cs" />
     <Compile Include="../../src/Replay/OverlayMethodDiscovery.cs" />
   </ItemGroup>
+  <Target Name="CopyOptionalOwnerFixture" AfterTargets="Build">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/missing-dependency/Owner/bin/$(Configuration)/net10.0/OptionalOverlayOwner.dll" DestinationFolder="$(OutDir)fixture" />
+  </Target>
 </Project>

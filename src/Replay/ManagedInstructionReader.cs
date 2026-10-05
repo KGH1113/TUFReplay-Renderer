@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
 
@@ -40,6 +41,9 @@ internal static class ManagedInstructionReader
                 try { member = method.Module.ResolveMember(BitConverter.ToInt32(il, offset),
                     method.DeclaringType?.GetGenericArguments(), method.IsGenericMethod ? method.GetGenericArguments() : null); }
                 catch (ArgumentException) { } catch (BadImageFormatException) { }
+                // A guarded optional integration can refer to an uninstalled DLL.
+                // It is not a standard input/clock member we can replace.
+                catch (FileNotFoundException) { } catch (TypeLoadException) { }
                 if (member != null) yield return member;
             }
             offset += size;
