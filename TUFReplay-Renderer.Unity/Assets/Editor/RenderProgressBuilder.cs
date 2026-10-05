@@ -33,6 +33,22 @@ namespace TUFReplayRenderer.Unity.Editor
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920, 1080);
             scaler.matchWidthOrHeight = .5f;
+            RectTransform backdrop = Rect("Backdrop", root.transform, Vector2.zero, Vector2.zero, Vector2.zero);
+            Stretch(backdrop);
+            Image backdropImage = backdrop.gameObject.AddComponent<Image>();
+            backdropImage.color = Color.black;
+            // Consume pointer input behind the progress panel while covering
+            // the editor. This presentation canvas is excluded from capture.
+            backdropImage.raycastTarget = true;
+            RectTransform preview = Rect("Preview", root.transform, Vector2.zero, Vector2.zero, Vector2.zero);
+            Stretch(preview);
+            RawImage previewImage = preview.gameObject.AddComponent<RawImage>();
+            previewImage.raycastTarget = false;
+            previewImage.color = Color.white;
+            AspectRatioFitter previewAspect = preview.gameObject.AddComponent<AspectRatioFitter>();
+            previewAspect.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            previewAspect.aspectRatio = 16f / 9;
+            preview.gameObject.SetActive(false);
             RectTransform card = Rect("Panel", root.transform, new Vector2(540, 174), new Vector2(0, 1), new Vector2(24, -24));
             Image panel = card.gameObject.AddComponent<Image>();
             panel.sprite = rounded; panel.type = Image.Type.Sliced; panel.color = ColorHex("171A23", .97f);
@@ -56,14 +72,6 @@ namespace TUFReplayRenderer.Unity.Editor
             colors.fadeDuration = .08f; button.colors = colors;
             TMP_Text cancelText = Label("Label", cancel, font, "취소", 16, Color.white, new Vector2(76, 30), Vector2.zero);
             cancelText.alignment = TextAlignmentOptions.Center;
-            RectTransform preview = Rect("Preview", root.transform, new Vector2(540, 304), new Vector2(0, 1), new Vector2(24, -210));
-            RawImage previewImage = preview.gameObject.AddComponent<RawImage>();
-            previewImage.raycastTarget = false;
-            previewImage.color = Color.white;
-            AspectRatioFitter previewAspect = preview.gameObject.AddComponent<AspectRatioFitter>();
-            previewAspect.aspectMode = AspectRatioFitter.AspectMode.WidthControlsHeight;
-            previewAspect.aspectRatio = 16f / 9;
-            preview.gameObject.SetActive(false);
             foreach (TMP_Text text in root.GetComponentsInChildren<TMP_Text>()) text.raycastTarget = false;
             PrefabUtility.SaveAsPrefabAsset(root, PrefabPath);
             UnityEngine.Object.DestroyImmediate(root);
@@ -99,6 +107,13 @@ namespace TUFReplayRenderer.Unity.Editor
             rect.anchorMin = rect.anchorMax = anchor; rect.pivot = new Vector2(0, 1);
             rect.sizeDelta = size; rect.anchoredPosition = position;
             return rect;
+        }
+        private static void Stretch(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(.5f, .5f);
+            rect.offsetMin = rect.offsetMax = Vector2.zero;
         }
         private static TMP_Text Label(string name, Transform parent, TMP_FontAsset font, string value, int size, Color color, Vector2 dimensions, Vector2 position)
         {

@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &1636646769
+--- !u!1 &306698073
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,8 +127,8 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 1636646771}
-  - component: {fileID: 1636646770}
+  - component: {fileID: 306698075}
+  - component: {fileID: 306698074}
   m_Layer: 0
   m_Name: Preview Camera
   m_TagString: Untagged
@@ -136,13 +136,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!20 &1636646770
+--- !u!20 &306698074
 Camera:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1636646769}
+  m_GameObject: {fileID: 306698073}
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
@@ -187,13 +187,13 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!4 &1636646771
+--- !u!4 &306698075
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1636646769}
+  m_GameObject: {fileID: 306698073}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -202,7 +202,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1001 &1659937071
+--- !u!1001 &1042294631
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -303,5 +303,5 @@ PrefabInstance:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 1636646771}
-  - {fileID: 1659937071}
+  - {fileID: 306698075}
+  - {fileID: 1042294631}

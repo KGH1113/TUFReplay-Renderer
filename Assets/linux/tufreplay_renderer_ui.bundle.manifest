@@ -1,16 +1,16 @@
 ManifestFileVersion: 0
 UnityVersion: 6000.3.10f1
-CRC: 3160837631
+CRC: 538738606
 Hashes:
   AssetFileHash:
     serializedVersion: 2
-    Hash: de66f9623c727b4c0bfc38369e3fb6a6
+    Hash: 7e909f5311adfe7f3ae8148275e49101
   TypeTreeHash:
     serializedVersion: 2
     Hash: c6bff85979bb51b661032fa40f48f030
   IncrementalBuildHash:
     serializedVersion: 2
-    Hash: 777684cfc0ee8232ac9b4b6c35f52c50
+    Hash: 959f05d3a78222919324938e6a57b315
 HashAppended: 0
 ClassTypes:
 - Class: 1
@@ -74,6 +74,12 @@ SerializeReferenceClassIdentifiers:
   ClassName: UnityEngine.TextCore.GlyphMetrics
 - AssemblyName: UnityEngine.TextCoreFontEngineModule
   ClassName: UnityEngine.TextCore.GlyphRect
+- AssemblyName: UnityEngine.TextCoreFontEngineModule
+  ClassName: UnityEngine.TextCore.LowLevel.GlyphAdjustmentRecord
+- AssemblyName: UnityEngine.TextCoreFontEngineModule
+  ClassName: UnityEngine.TextCore.LowLevel.GlyphPairAdjustmentRecord
+- AssemblyName: UnityEngine.TextCoreFontEngineModule
+  ClassName: UnityEngine.TextCore.LowLevel.GlyphValueRecord
 - AssemblyName: UnityEngine.UI
   ClassName: UnityEngine.UI.AnimationTriggers
 - AssemblyName: UnityEngine.UI

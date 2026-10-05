@@ -34,6 +34,8 @@ Pixel capture, virtual input and animation synchronization are separate capabili
 
 ## Development
 
+While a render is active, its presentation canvas covers the game/editor with an opaque black background. The optional live render preview fits the entire game window without cropping or stretching, with letterboxing when aspect ratios differ. Only the preview and progress/cancel panel are visible. The presentation canvas is excluded from video capture and is hidden when the job ends or is cancelled.
+
 Use `./scripts/run.sh` for build, installation, tests and packaging. The workflow/task/library structure is ported from TUFReplay. The engine source is included; no external OrbitRender checkout or DLL is required. Build the progress UI bundles in `TUFReplay-Renderer.Unity` before packaging. Copy `.env.example` to `.env` when local paths differ from the macOS Steam defaults, then:
 
 ```sh
