@@ -76,6 +76,17 @@ these counts during ordinary playback separates OS emission from game-hub delive
 Nested consumer and exception cleanup tests are included in the portable queue kernel.
 The clock rewriter uses decoded IL instructions and locked stopwatch state. Metadata
 checks inspect the actual shared input hub, event fields and platform key mapper.
+
+Small, read-only clock getters are also copied with their standard clock reads
+rewritten, and calls to those getters use the copy. This prevents previously
+inlined wall-clock getter code from surviving in overlay animation and input
+callers. Branches, private clock fields, local TimeSpan values and the original
+clock units are preserved. Bounded, aggressively inlined timestamp converters
+also receive copies that preserve their original clock-offset updates; this covers
+converters inlined into event listeners. Arbitrary handler/scheduler calls and
+getters with side effects are excluded, as are methods already patched by another
+Harmony owner. Portable tests warm the original getter first and check both tick
+units and fixed video time; actual Unity JIT behavior still needs a game render.
 Lifecycle fixtures include macOS native key code zero, focus restoration and short taps.
 Overlay screen dimensions and screen-space projection use the selected output size
 and capture camera. Presentation reads recognize editor replay only at overlay call sites.

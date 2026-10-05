@@ -12,6 +12,7 @@
     <Compile Include="../../src/Replay/OverlayAssemblyDiscovery.cs" />
     <Compile Include="../../src/Replay/OverlayMethodDiscovery.cs" />
     <Compile Include="../../src/Replay/OverlayQueuePlan.cs" />
+    <Compile Include="../../src/Replay/OverlayClockAccessor.cs" />
   </ItemGroup>
   <Target Name="CopyOptionalOwnerFixture" AfterTargets="Build">
     <Copy SourceFiles="$(MSBuildProjectDirectory)/missing-dependency/Owner/bin/$(Configuration)/net10.0/OptionalOverlayOwner.dll" DestinationFolder="$(OutDir)fixture" />

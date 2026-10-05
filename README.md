@@ -34,6 +34,8 @@ Pixel capture, virtual input and animation synchronization are separate capabili
 
 The shared overlay runtime discovers assemblies from components on persistent canvases instead of looking up individual mod types or private handlers. Short taps retain distinct original timestamps even within one video frame. Capture waits for tracked managed work and a UI refresh at fixed video time; an unsettled overlay produces a bounded, cancellable timeout. Physical input and the shared hub's focus policy are restored when rendering ends. Native cumulative counters follow each mod's own replay policy. See [the implementation and validation scope](docs/shared-overlay-runtime-proposal.md) for supported APIs and limitations.
 
+Small clock accessors and bounded inline timestamp converters are rewritten at their calling sites as well, so warmed Unity JIT code cannot keep an inlined wall clock for rain animations while recorded events use video time. Original tick units and timestamp-offset updates are preserved. Existing Harmony patches and arbitrary scheduler/handler calls remain outside this copying path; visual timing still requires an actual game render.
+
 ## Development
 
 While a render is active, its presentation canvas covers the game/editor with an opaque black background. The optional live render preview fits the entire game window without cropping or stretching, with letterboxing when aspect ratios differ. Only the preview and progress/cancel panel are visible. The presentation canvas is excluded from video capture and is hidden when the job ends or is cancelled.

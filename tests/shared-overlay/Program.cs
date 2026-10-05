@@ -12,7 +12,7 @@ internal static class Program
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static int Main()
     {
-        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); FailedCleanup(); Decode(); Console.WriteLine("PASS: shared overlay method/root scope; production input lifecycle, timestamps, native restoration even after cleanup failure and IL decoding."); return 0; }
+        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); FailedCleanup(); Decode(); OverlayClockAccessorTests.Run(); Console.WriteLine("PASS: shared overlay method/root scope; production input lifecycle, timestamps, native restoration even after cleanup failure and IL decoding."); return 0; }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }
     }
     private static void Scope()

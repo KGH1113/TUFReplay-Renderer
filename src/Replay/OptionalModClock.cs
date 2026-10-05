@@ -40,6 +40,26 @@ internal sealed class OptionalModClock : IDisposable
             runtime.Configure();
             Type[] components = OverlayAssemblyDiscovery.DiscoverComponents();
             MethodInfo[] methods = OverlayMethodDiscovery.Discover(components, typeof(SkyHook.SkyHookEvent));
+            // Rebuild tiny clock accessors at their call sites. Patching only a
+            // getter cannot update copies already inlined by Unity's Mono JIT.
+            var standardClocks = runtime.replacements.Where(pair => pair.Key.DeclaringType == typeof(Time)
+                || pair.Key.DeclaringType == typeof(Stopwatch) || pair.Key.DeclaringType == typeof(DateTime))
+                .ToDictionary(pair => pair.Key, pair => pair.Value);
+            // Follow bounded inline clock-conversion chains as well: a timestamp
+            // normalizer can itself be inlined into the original input listener.
+            for (int depth = 0; depth < 4; depth++)
+            {
+                bool added = false;
+                foreach (MethodInfo method in methods)
+                {
+                    if (standardClocks.ContainsKey(method) || Harmony.GetPatchInfo(method)?.Owners.Count > 0) continue;
+                    MethodInfo copy = OverlayClockAccessor.Create(method, standardClocks);
+                    if (copy == null) continue;
+                    runtime.replacements[method] = standardClocks[method] = copy;
+                    added = true;
+                }
+                if (!added) break;
+            }
             runtime.queuePlan = new OverlayQueuePlan(methods);
             runtime.clock.Work.HandoffQueues.UnionWith(runtime.queuePlan.Handoff);
             foreach (var group in methods.GroupBy(m => m.DeclaringType.Assembly))
