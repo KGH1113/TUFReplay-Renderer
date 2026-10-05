@@ -14,5 +14,5 @@ public sealed class OverlayCapability
 public static class OptionalModCapabilities
 {
     public static OverlayCapability[] Inspect() => OverlayAssemblyDiscovery.Discover().Select(a => new OverlayCapability { Mod = a.GetName().Name }).ToArray();
-    public static string[] Warnings() => Inspect().Select(c => c.Mod + ": " + c.Detail).ToArray();
+    public static string[] Warnings() => System.Array.Empty<string>();
 }

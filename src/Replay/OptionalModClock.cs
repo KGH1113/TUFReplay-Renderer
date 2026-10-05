@@ -40,6 +40,7 @@ internal sealed class OptionalModClock : IDisposable
             foreach (var group in OverlayMethodDiscovery.Discover(components, typeof(SkyHook.SkyHookEvent)).GroupBy(m => m.DeclaringType.Assembly))
             {
                 Assembly assembly = group.Key;
+                int patched = 0;
                 foreach (MethodInfo method in group)
                 {
                     if (method.ContainsGenericParameters || method.IsAbstract || method.GetMethodBody() == null) continue;
@@ -54,8 +55,11 @@ internal sealed class OptionalModClock : IDisposable
                         Main.Entry.Logger.Error("Shared overlay patch failed: " + method.DeclaringType.FullName + "." + method.Name + "\n" + e);
                         throw new InvalidOperationException("The overlay " + assembly.GetName().Name + " could not use replay input or time. Disable its overlay and try again. " + method.DeclaringType.Name + "." + method.Name + ": " + e.GetBaseException().Message, e);
                     }
+                    patched++;
                 }
-                warning?.Invoke(assembly.GetName().Name + ": shared input, video clocks and managed queue tracking enabled; native workers and custom schedulers require a game comparison.");
+                // Discovery details belong in developer logs, not a compatibility
+                // warning that implies named adapters or verified mod support.
+                if (patched != 0) Main.Entry.Logger.Log("Shared overlay runtime: " + assembly.GetName().Name + ", standard API call sites in " + patched + " methods; game visuals remain unverified.");
             }
             return runtime;
         }

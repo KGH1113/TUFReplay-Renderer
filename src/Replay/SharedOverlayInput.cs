@@ -38,7 +38,7 @@ internal sealed class SharedOverlayInput : IDisposable
             manager.requireFocus = false;
             hub = (Action<SkyHookEvent>)Delegate.CreateDelegate(typeof(Action<SkyHookEvent>), manager, AccessTools.Method(typeof(SkyHookManager), "HookCallback"));
             harmony.Patch(AccessTools.Method(typeof(SkyHookManager), "NativeHookCallback"), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(BlockNative)) { priority = Priority.First });
-            harmony.Patch(AccessTools.Method(typeof(UnityEvent<SkyHookEvent>), "Invoke"), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(AllowSharedEvent)) { priority = Priority.First });
+            harmony.Patch(AccessTools.Method(typeof(UnityEvent<SkyHookEvent>), "Invoke", new[] { typeof(SkyHookEvent) }), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(AllowSharedEvent)) { priority = Priority.First });
             harmony.Patch(AccessTools.PropertyGetter(typeof(SkyHookManager), "isHookActive"), prefix: new HarmonyMethod(typeof(SharedOverlayInput), nameof(HookActive)));
             // Reset start-held state through the shared event, including viewers
             // that maintain their own physical-held cache. No mod fields touched.

@@ -118,6 +118,9 @@ namespace UnityEngine.Events
         public void AddListener(Action<T> listener) => listeners += listener;
         public void RemoveListener(Action<T> listener) => listeners -= listener;
         public void Invoke(T value) { if (FixturePatches.Allow(GetType(), "Invoke", this, new object[] { value }, out _)) listeners?.Invoke(value); }
+        // Unity's inherited invocation helpers make a name-only lookup ambiguous.
+        // Keep another overload so production must request Invoke(T) explicitly.
+        public void Invoke(object[] values) => throw new InvalidOperationException("Wrong Unity event overload");
     }
 }
 namespace SkyHook

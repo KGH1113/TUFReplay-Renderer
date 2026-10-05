@@ -29,6 +29,12 @@ Portable tests cover delayed workers, one-millisecond taps, fixed frame deltas,
 pending/in-flight work, text propagation, old queued work and nested time scopes.
 These tests do not prove real Unity/Harmony compatibility.
 
+The common Unity event patch selects `Invoke(SkyHookEvent)` by its parameter
+signature; the lifecycle fixture deliberately contains another overload and the
+installed Unity metadata contract is checked. Automatically discovered assembly
+names and patch counts appear only in developer logs, rather than success notices
+presented as per-mod compatibility warnings.
+
 ## Active integration
 
 The integration is restricted to assemblies owning persistent

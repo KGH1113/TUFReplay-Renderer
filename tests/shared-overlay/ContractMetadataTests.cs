@@ -27,6 +27,8 @@ internal static class ContractMetadataTests
         source.Method("SkyHook.SkyHookKeyMapper", "UnityKeyToSkyHookKey", "SkyHook.KeyLabel", "UnityEngine.KeyCode");
         source.Method("SkyHook.SkyHookKeyMapper", "KeyLabelToNativeKeyCode", "System.UInt16", "SkyHook.KeyLabel");
         source.Method("SkyHook.SkyHookKeyMapper", "SkyHookKeyToUnityKey", "UnityEngine.KeyCode", "SkyHook.KeyLabel");
+        using var unity = new Contract(Path.Combine(managed, "UnityEngine.CoreModule.dll"));
+        unity.Method("UnityEngine.Events.UnityEvent`1", "Invoke", "System.Void", "!0");
         Console.WriteLine("PASS: shared SkyHook event, callback, focus policy and key mapper metadata contracts.");
     }
     private sealed class Contract : IDisposable
