@@ -98,6 +98,8 @@ The independent driver restores hit context and runs the installed game's `scrPl
 
 ## Media and optional overlays
 
+An optional top-level `warnings` array carries recorder notices into the render job. In particular, exports recovered from the older pre-start zero-terminal recorder defect use the last recorded event as their terminal and warn that key timestamps already recorded as zero cannot be reconstructed. The renderer retains every exported event and does not relax terminal validation for other bundles.
+
 `media` is preserved as a JSON object. The composition layer accepts nullable `webcam` and `microphone` objects, each with a relative `file` path. Webcam timing includes `captureStartOffsetUs`, `gameplayRate`, `durationUs`, and optional timeline segments `{timelineTimeUs, videoTimeUs, gameplayRate}`. Appearance includes normalized layout/crop, `mirror` and optional `offsetMs`. Microphone uses `captureStartOffsetUs`, optional `latencyUs` and `volume`. Recorded media is decoded outside the accelerated Unity simulation and composed on the same replay-to-video mapping. See the renderer settings example for the independently exported ImplDmNote overlay.
 
 Capturing an overlay's Canvas supplies its pixels. It does not supply its recorded input, clock or a barrier for asynchronous/native workers. `OptionalModCapabilities.Inspect()` reports investigated installed assemblies, input-adapter status and `RuntimeVerified = false`. At present none of the optional-mod integrations has been established by an in-game comparison.

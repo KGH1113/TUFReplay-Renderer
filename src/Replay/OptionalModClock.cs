@@ -24,17 +24,27 @@ internal sealed class OptionalModClock : IDisposable
     private readonly double scaledOrigin = Time.timeAsDouble, unscaledOrigin = Time.unscaledTimeAsDouble, realtimeOrigin = Time.realtimeSinceStartupAsDouble;
     private readonly long timestampOrigin = Stopwatch.GetTimestamp();
     private readonly DateTime localOrigin = DateTime.Now;
-    private readonly OverlayVideoClock clock = new(DateTime.UtcNow, () => ReplayHooks.Current?.CurrentVideoTimeUs / 1e6 ?? RendererController.Instance?.Clock.Time ?? 0);
+    private readonly OverlayVideoClock clock;
     internal static OverlayVideoClock Clock => active?.clock ?? throw new InvalidOperationException("The shared overlay clock is not initialized.");
     internal static bool Settled => active == null || active.clock.Work.IsSettled;
     internal static long WorkRevision => active?.clock.Work.Revision ?? 0;
     internal static string PendingWork => active?.clock.Work.PendingDescription ?? "";
     private static double Seconds => active?.clock.Seconds ?? 0;
 
-    internal static OptionalModClock Begin(Action<string> warning)
+    private OptionalModClock(RecordedReplayDriver driver)
+    {
+        if (driver == null) throw new ArgumentNullException(nameof(driver));
+        // The engine retains its last clock after a render. Preparation happens
+        // before ReplayHooks.Activate, so consulting that global clock here can
+        // expose the previous run's end time to warmed overlay input listeners.
+        // Bind this session to its own driver from the first rewritten call.
+        clock = new OverlayVideoClock(DateTime.UtcNow, () => driver.CurrentVideoTimeUs / 1e6);
+    }
+
+    internal static OptionalModClock Begin(RecordedReplayDriver driver, Action<string> warning)
     {
         if (active != null) throw new InvalidOperationException("A shared overlay clock is already active.");
-        var runtime = new OptionalModClock(); active = runtime;
+        var runtime = new OptionalModClock(driver); active = runtime;
         try
         {
             runtime.Configure();
@@ -85,7 +95,8 @@ internal sealed class OptionalModClock : IDisposable
                 }
                 // Discovery details belong in developer logs, not a compatibility
                 // warning that implies named adapters or verified mod support.
-                if (patched != 0) Main.Entry.Logger.Log("Shared overlay runtime: " + assembly.GetName().Name + ", standard API call sites in " + patched + " methods; game visuals remain unverified.");
+                if (patched != 0) Main.Entry.Logger.Log("Shared overlay runtime: " + assembly.GetName().Name + ", standard API call sites in " + patched
+                    + " methods, inline clock copies=" + standardClocks.Keys.Count(member => member.DeclaringType?.Assembly == assembly) + "; game visuals remain unverified.");
             }
             return runtime;
         }

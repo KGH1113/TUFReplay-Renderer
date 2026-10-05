@@ -87,6 +87,12 @@ converters inlined into event listeners. Arbitrary handler/scheduler calls and
 getters with side effects are excluded, as are methods already patched by another
 Harmony owner. Portable tests warm the original getter first and check both tick
 units and fixed video time; actual Unity JIT behavior still needs a game render.
+Each job binds the clock to its new replay driver before installing any overlay
+rewrites. Preparation stays at that driver's frame zero, even when the embedded
+engine still retains the previous job's final clock. Repeated-session fixtures
+exercise the production clock with warmed, persistent stopwatch accessors and
+timestamp converters across three jobs; Harmony/Unity host boundaries remain
+fixtures rather than a claim of live Mono validation.
 Lifecycle fixtures include macOS native key code zero, focus restoration and short taps.
 Overlay screen dimensions and screen-space projection use the selected output size
 and capture camera. Presentation reads recognize editor replay only at overlay call sites.

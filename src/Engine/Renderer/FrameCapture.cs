@@ -503,17 +503,25 @@ namespace OrbitRender.Renderer
             Graphics.Blit(gameTarget, target);
             if (hudOverlayCamera == null) return;
 
-            SyncHudOverlayCamera();
-            foreach (var state in canvases)
+            try
             {
-                if (!state.Capture || state.Canvas == null) continue;
-                // Rain/judgment objects can be created after capture setup. Visit
-                // only output frames and avoid allocating a Transform array.
-                AssignLayerRecursively(state.Canvas.gameObject);
-                ConfigureCaptureCanvas(state.Canvas, hudOverlayCamera);
-                state.Canvas.enabled = true;
+                SyncHudOverlayCamera();
+                foreach (var state in canvases)
+                {
+                    if (!state.Capture || state.Canvas == null) continue;
+                    // Rain/judgment objects can be created after capture setup. Visit
+                    // only output frames and avoid allocating a Transform array.
+                    AssignLayerRecursively(state.Canvas.gameObject);
+                    ConfigureCaptureCanvas(state.Canvas, hudOverlayCamera);
+                    state.Canvas.enabled = true;
+                }
+                // Overlay graphics created while their root canvas was hidden
+                // can still lack an active canvas or completed mesh/layout rebuild.
+                // Flush Unity's normal UI callbacks after enabling the selected
+                // roots, before manually drawing this output frame.
+                Canvas.ForceUpdateCanvases();
+                hudOverlayCamera.Render();
             }
-            try { hudOverlayCamera.Render(); }
             finally
             {
                 foreach (var state in canvases)

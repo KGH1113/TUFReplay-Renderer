@@ -31,7 +31,7 @@ internal static class OverlayDiscoveryTests
         new() { enabled = enabled, renderMode = mode, gameObject = new GameObject { scene = new Scene { name = scene } },
             transform = new Transform { name = name, parent = parent == null ? null : new Transform { name = parent } }, components = new[] { component } };
 }
-internal class scrController { }
+internal class scrController { public bool gameworld; }
 namespace UnityEngine
 {
     internal static class ObjectFixture { internal static Canvas[] Canvases = Array.Empty<Canvas>(); }

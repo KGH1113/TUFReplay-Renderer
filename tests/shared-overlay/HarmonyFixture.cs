@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 
 // The installed Mono detour runtime cannot execute on this .NET 10 macOS host. This shim exercises
 // the production adapter's prefix boundaries against an explicit managed worker fixture instead.
@@ -17,10 +18,13 @@ public sealed class Harmony
 {
     public string Id { get; }
     public Harmony(string id) { Id = id; }
-    public void Patch(MethodBase original, HarmonyMethod prefix = null, HarmonyMethod postfix = null)
+    public void Patch(MethodBase original, HarmonyMethod prefix = null, HarmonyMethod postfix = null, HarmonyMethod transpiler = null, HarmonyMethod finalizer = null)
     { if (prefix != null) FixturePatches.Add(Id, original, prefix.method); }
     public void UnpatchAll(string id) { if (FixturePatches.FailUnpatch) throw new InvalidOperationException("Fixture cleanup failure"); FixturePatches.Remove(id); }
+    public static Patches GetPatchInfo(MethodBase original) => null;
 }
+public sealed class Patches { public System.Collections.Generic.List<string> Owners { get; } = new(); }
+public sealed class CodeInstruction { public OpCode opcode; public object operand; }
 public static class AccessTools
 {
     private const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;

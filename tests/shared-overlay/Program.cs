@@ -12,7 +12,7 @@ internal static class Program
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     private static int Main()
     {
-        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); FailedCleanup(); Decode(); OverlayClockAccessorTests.Run(); Console.WriteLine("PASS: shared overlay method/root scope; production input lifecycle, timestamps, native restoration even after cleanup failure and IL decoding."); return 0; }
+        try { ContractMetadataTests.Run(); Scope(); Lifecycle(); FailedCleanup(); Decode(); OverlayClockAccessorTests.Run(); OptionalModClockTests.Run(); Console.WriteLine("PASS: shared overlay method/root scope; production input lifecycle, timestamps, native restoration even after cleanup failure and IL decoding."); return 0; }
         catch (Exception e) { Console.Error.WriteLine(e); return 1; }
     }
     private static void Scope()
@@ -32,6 +32,7 @@ internal static class Program
         var events = new List<SkyHook.SkyHookEvent>();
         SkyHook.SkyHookManager.KeyUpdated.AddListener(events.Add);
         var driver = new RecordedReplayDriver();
+        using var clock = OptionalModClock.Begin(driver, _ => { });
         using (var input = new SharedOverlayInput(driver))
         {
             input.Begin();
@@ -73,7 +74,9 @@ internal static class Program
         int received = 0;
         Action<SkyHook.SkyHookEvent> listener = _ => received++;
         SkyHook.SkyHookManager.KeyUpdated.AddListener(listener);
-        var input = new SharedOverlayInput(new RecordedReplayDriver());
+        var driver = new RecordedReplayDriver();
+        using var clock = OptionalModClock.Begin(driver, _ => { });
+        var input = new SharedOverlayInput(driver);
         try
         {
             input.Begin();
@@ -102,7 +105,7 @@ internal static class Program
 namespace TUFReplayRenderer.Replay
 {
     internal sealed class RecordedReplayDriver { public long CurrentVideoTimeUs; }
-    internal static class OptionalModClock { internal static OverlayVideoClock Clock { get; } = new(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), () => 0); }
+    internal static class ReplayHooks { internal static RecordedReplayDriver Current; }
 }
 namespace UnityEngine
 {

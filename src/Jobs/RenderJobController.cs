@@ -177,6 +177,8 @@ public sealed class RenderJobController : MonoBehaviour
         backgroundWork = preparation;
         while (!preparation.IsCompleted) yield return null;
         var bundle = preparation.GetAwaiter().GetResult();
+        foreach (string warning in bundle.Manifest.Warnings ?? Array.Empty<string>())
+            if (!string.IsNullOrWhiteSpace(warning)) job.Warnings.Enqueue(warning);
         bool previousBackground = Application.runInBackground;
         Application.runInBackground = true;
         job.WaitingForFfmpeg = true;
@@ -275,7 +277,7 @@ public sealed class RenderJobController : MonoBehaviour
             throw new RecordingFormatException("render_start_tile_out_of_range", "The recorded start tile is outside this level. Restore the original level file and try again.", "startTile");
         activeDriver = new RecordedReplayDriver(bundle, endDelaySeconds: options.EndDelaySeconds);
         activeDriver.CompatibilityWarning += message => job.Warnings.Enqueue(message);
-        optionalClock = OptionalModClock.Begin(message => job.Warnings.Enqueue(message));
+        optionalClock = OptionalModClock.Begin(activeDriver, message => job.Warnings.Enqueue(message));
         activeDriver.PrepareBeforeRender();
         activeRenderer = reservedRenderer;
         job.RawGameOutput = Path.Combine(job.WorkDirectory, "game" + extension);

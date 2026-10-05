@@ -13,6 +13,7 @@ public sealed class RecordingManifest
   [JsonProperty("inputsFile", Required = Required.Always)] public string InputsFile { get; set; }
   [JsonProperty("hitsFile", Required = Required.Always)] public string HitsFile { get; set; }
   [JsonProperty("media")] public JObject Media { get; set; }
+  [JsonProperty("warnings")] public string[] Warnings { get; set; } = Array.Empty<string>();
 
   public void Validate()
   {
