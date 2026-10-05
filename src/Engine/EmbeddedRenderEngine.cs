@@ -84,7 +84,7 @@ public static class EmbeddedRenderEngine
                 cancellation.ThrowIfCancellationRequested();
                 Task.WhenAll(stdout, stderr).GetAwaiter().GetResult();
                 bool valid = process.ExitCode == 0 && stdout.Result.StartsWith("ffmpeg version", StringComparison.OrdinalIgnoreCase);
-                return new EngineFfmpegStatus { Available = valid, Path = resolved, Reason = valid ? null : "TUFReplay's FFmpeg could not run. Retry installation in the game and check your security software." };
+                return new EngineFfmpegStatus { Available = valid, Path = resolved, Reason = valid ? null : "TUFReplay's FFmpeg could not run. Retry installation in the web download center and check your security software." };
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception exception) { return new EngineFfmpegStatus { Available = false, Path = resolved, Reason = exception.Message }; }

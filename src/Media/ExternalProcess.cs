@@ -40,7 +40,7 @@ internal static class ExternalProcess
             RedirectStandardError = true, RedirectStandardOutput = true
         }};
         try {
-            if (!process.Start()) throw Failure("ffmpeg_unavailable", "TUFReplay's FFmpeg could not start. Retry its installation in the game.", executable);
+            if (!process.Start()) throw Failure("ffmpeg_unavailable", "TUFReplay's FFmpeg could not start. Retry its installation in the web download center.", executable);
         }
         catch (Win32Exception error) {
             throw Failure(error.NativeErrorCode == 5 || error.NativeErrorCode == 13 ? "render_access_denied" : "ffmpeg_unavailable",

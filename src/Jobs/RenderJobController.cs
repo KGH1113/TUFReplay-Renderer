@@ -188,7 +188,7 @@ public sealed class RenderJobController : MonoBehaviour
             ffmpegStatus = ffmpegCheck.GetAwaiter().GetResult();
         }
         finally { job.WaitingForFfmpeg = false; Application.runInBackground = previousBackground; }
-        if (!ffmpegStatus.Available) throw new RenderOperationException("ffmpeg_unavailable", ffmpegStatus.Reason ?? "Retry FFmpeg installation through TUFReplay in the game.");
+        if (!ffmpegStatus.Available) throw new RenderOperationException("ffmpeg_unavailable", ffmpegStatus.Reason ?? "Retry FFmpeg installation in TUFReplay's web download center.");
         var options = job.Options;
         EmbeddedRenderEngine.Configure(ffmpegStatus.Path, options.OutputDirectory);
         var requestOptions = options.ToEngineOptions(null);
