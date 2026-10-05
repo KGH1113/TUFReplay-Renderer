@@ -19,6 +19,7 @@ internal sealed class OptionalModClock : IDisposable
     private static OptionalModClock active;
     private readonly Harmony harmony = new("KGH1113.TUFReplayRenderer.OptionalModClock");
     private readonly Dictionary<MemberInfo, MethodInfo> replacements = new();
+    private OverlayQueuePlan queuePlan;
     private readonly ConditionalWeakTable<Stopwatch, VirtualWatch> watches = new();
     private readonly double scaledOrigin = Time.timeAsDouble, unscaledOrigin = Time.unscaledTimeAsDouble, realtimeOrigin = Time.realtimeSinceStartupAsDouble;
     private readonly long timestampOrigin = Stopwatch.GetTimestamp();
@@ -27,6 +28,7 @@ internal sealed class OptionalModClock : IDisposable
     internal static OverlayVideoClock Clock => active?.clock ?? throw new InvalidOperationException("The shared overlay clock is not initialized.");
     internal static bool Settled => active == null || active.clock.Work.IsSettled;
     internal static long WorkRevision => active?.clock.Work.Revision ?? 0;
+    internal static string PendingWork => active?.clock.Work.PendingDescription ?? "";
     private static double Seconds => active?.clock.Seconds ?? 0;
 
     internal static OptionalModClock Begin(Action<string> warning)
@@ -37,7 +39,10 @@ internal sealed class OptionalModClock : IDisposable
         {
             runtime.Configure();
             Type[] components = OverlayAssemblyDiscovery.DiscoverComponents();
-            foreach (var group in OverlayMethodDiscovery.Discover(components, typeof(SkyHook.SkyHookEvent)).GroupBy(m => m.DeclaringType.Assembly))
+            MethodInfo[] methods = OverlayMethodDiscovery.Discover(components, typeof(SkyHook.SkyHookEvent));
+            runtime.queuePlan = new OverlayQueuePlan(methods);
+            runtime.clock.Work.HandoffQueues.UnionWith(runtime.queuePlan.Handoff);
+            foreach (var group in methods.GroupBy(m => m.DeclaringType.Assembly))
             {
                 Assembly assembly = group.Key;
                 int patched = 0;
@@ -45,10 +50,11 @@ internal sealed class OptionalModClock : IDisposable
                 {
                     if (method.ContainsGenericParameters || method.IsAbstract || method.GetMethodBody() == null) continue;
                     MemberInfo[] members = ManagedInstructionReader.Members(method).ToArray();
-                    if (!members.Any(m => runtime.Replacement(m) != null)) continue;
-                    bool consumer = members.Any(m => m is MethodBase mb && mb.Name == "TryDequeue" && QueueReplacement(mb) != null);
+                    bool handoff = runtime.queuePlan.Consumers.Contains(method);
+                    if (!handoff && !members.Any(m => runtime.Replacement(m) != null)) continue;
+                    bool consumer = handoff || members.Any(m => m is MethodBase mb && mb.Name == "TryDequeue" && runtime.QueueReplacement(mb) != null);
                     try { runtime.harmony.Patch(method,
-                        prefix: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterConsumer)) : null,
+                        prefix: handoff ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterHandoff)) : consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(EnterConsumer)) : null,
                         transpiler: new HarmonyMethod(typeof(OptionalModClock), nameof(Rewrite)),
                         finalizer: consumer ? new HarmonyMethod(typeof(OptionalModClock), nameof(LeaveConsumer)) : null); }
                     catch (Exception e) {
@@ -90,10 +96,11 @@ internal sealed class OptionalModClock : IDisposable
     }
     private void Register(MemberInfo original, Type owner, string name) { if (original != null) replacements[original] = AccessTools.Method(owner, name); }
     private MethodInfo Replacement(MemberInfo member) => replacements.TryGetValue(member, out var replacement) ? replacement : member is MethodBase method ? QueueReplacement(method) : null;
-    private static MethodInfo QueueReplacement(MethodBase method)
+    private MethodInfo QueueReplacement(MethodBase method)
     {
         Type owner = method.DeclaringType;
         if (owner?.IsGenericType != true || owner.GetGenericTypeDefinition() != typeof(ConcurrentQueue<>)) return null;
+        if (queuePlan?.Retained.Contains(owner) == true || (method.Name == "TryDequeue" && queuePlan?.Handoff.Contains(owner) == true)) return null;
         string name = method.Name == "Enqueue" ? nameof(Enqueue) : method.Name == "TryDequeue" ? nameof(Dequeue) : null;
         return name == null ? null : AccessTools.Method(typeof(OptionalModClock), name).MakeGenericMethod(owner.GetGenericArguments());
     }
@@ -110,6 +117,7 @@ internal sealed class OptionalModClock : IDisposable
     private static void Enqueue<T>(ConcurrentQueue<T> queue, T item) { if (active == null) queue.Enqueue(item); else active.clock.Work.Enqueue(queue, item); }
     private static bool Dequeue<T>(ConcurrentQueue<T> queue, out T item) => active == null ? queue.TryDequeue(out item) : active.clock.Work.TryDequeue(queue, out item);
     private static void EnterConsumer(out IDisposable __state) => __state = active?.clock.Work.ConsumerScope();
+    private static void EnterHandoff(object __0, out IDisposable __state) => __state = active?.clock.Work.ConsumeHandoff(__0);
     private static void LeaveConsumer(IDisposable __state) => __state?.Dispose();
     private VirtualWatch State(Stopwatch watch) => watches.GetValue(watch, value => new VirtualWatch {
         Running = value.IsRunning, Started = 0,

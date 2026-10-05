@@ -16,6 +16,7 @@ namespace OrbitRender.Renderer
     {
         bool OverlayWorkSettled { get; }
         long OverlayWorkRevision { get; }
+        string OverlayPendingWork { get; }
         void OverlayRefreshFrameCompleted();
     }
 
@@ -88,6 +89,7 @@ namespace OrbitRender.Renderer
         internal RenderReplayContext Context { get; }
         internal bool OverlayWorkSettled => driver is not IRenderOverlaySynchronization sync || sync.OverlayWorkSettled;
         internal long OverlayWorkRevision => driver is IRenderOverlaySynchronization sync ? sync.OverlayWorkRevision : 0;
+        internal string OverlayPendingWork => driver is IRenderOverlaySynchronization sync ? sync.OverlayPendingWork : "";
         internal void OverlayRefreshFrameCompleted() { if (driver is IRenderOverlaySynchronization sync) sync.OverlayRefreshFrameCompleted(); }
 
         internal RenderReplaySession(IRenderReplayDriver driver, RenderReplayContext context)

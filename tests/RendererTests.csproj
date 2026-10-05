@@ -13,6 +13,8 @@
     <Compile Include="../src/Replay/ReplayEventCursor.cs" />
     <Compile Include="../src/Replay/OverlayWorkFence.cs" />
     <Compile Include="../src/Replay/OverlayVideoClock.cs" />
+    <Compile Include="../src/Replay/OverlayQueuePlan.cs" />
+    <Compile Include="../src/Replay/ManagedInstructionReader.cs" />
     <Compile Include="../src/Media/RenderTimeline.cs" />
     <Compile Include="../src/Media/MediaCompositionPlan.cs" />
     <Compile Include="../src/Media/MediaOverlay.cs" />

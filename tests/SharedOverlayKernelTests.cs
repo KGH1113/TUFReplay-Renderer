@@ -11,6 +11,7 @@ internal static class SharedOverlayKernelTests
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
     internal static void Run()
     {
+        ExistingWorkerAndHistory();
         var origin = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         double frameTime = 10;
         var clock = new OverlayVideoClock(origin, () => frameTime);
@@ -85,5 +86,78 @@ internal static class SharedOverlayKernelTests
         }
         Check(clock.Seconds == frameTime, "Dispatch cleanup must restore normal video time.");
         Console.WriteLine("PASS: shared overlay kernel: delayed workers, sub-frame rain timing, fixed FPS/refresh delta, queue fences, propagated text and scope restoration.");
+    }
+    private static void ExistingWorkerAndHistory()
+    {
+        var methods = typeof(QueueFixture).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        var plan = new OverlayQueuePlan(methods);
+        Check(plan.Retained.Contains(typeof(ConcurrentQueue<long>)), "Peek/expiry history must not be treated as immediately drainable work.");
+        Check(plan.Handoff.Contains(typeof(ConcurrentQueue<WorkItem>)), "A long-lived loop's separate per-item handler must be identified.");
+        var fence = new OverlayWorkFence();
+        fence.HandoffQueues.UnionWith(plan.Handoff);
+        var queue = new ConcurrentQueue<WorkItem>();
+        var ready = new ManualResetEventSlim();
+        var signal = new ManualResetEventSlim();
+        var entered = new ManualResetEventSlim();
+        var finish = new ManualResetEventSlim();
+        var worker = Task.Run(() => {
+            ready.Set(); signal.Wait();
+            // The already-running loop still calls the original queue API.
+            Check(queue.TryDequeue(out WorkItem input), "Existing worker must receive the original queue item.");
+            using (fence.ConsumeHandoff(input))
+            {
+                Check(fence.EventTime == 1.234, "Per-item handoff must recover exact event time from a native dequeue.");
+                entered.Set(); finish.Wait();
+            }
+        });
+        Check(ready.Wait(2000), "Existing worker did not start.");
+        using (fence.Dispatch(1.234)) fence.Enqueue(queue, new WorkItem(7));
+        signal.Set();
+        try
+        {
+            Check(entered.Wait(2000), "Existing worker did not enter its per-item handler.");
+            Check(queue.IsEmpty && !fence.IsSettled, "An empty queue must still wait for the active handler.");
+        }
+        finally { finish.Set(); }
+        worker.GetAwaiter().GetResult();
+        Check(fence.IsSettled && fence.EventTime == null, "Existing worker must release the frame after its handler completes.");
+        using (fence.Dispatch(2)) fence.Enqueue(queue, new WorkItem(8));
+        Check(queue.TryDequeue(out var next), "Exception handoff must consume its item.");
+        try { using var scope = fence.ConsumeHandoff(next); throw new InvalidOperationException("handoff fixture"); }
+        catch (InvalidOperationException e) when (e.Message == "handoff fixture") { }
+        Check(fence.IsSettled, "Handler failure must release handoff work.");
+        var liveQueue = new ConcurrentQueue<WorkItem>();
+        liveQueue.Enqueue(new WorkItem(100));
+        using (fence.Dispatch(3)) fence.Enqueue(liveQueue, new WorkItem(101));
+        Check(liveQueue.TryDequeue(out var live), "Existing native item must be consumed normally.");
+        using (fence.ConsumeHandoff(live)) Check(fence.EventTime == null, "Old native work must not inherit recorded time.");
+        Check(liveQueue.TryDequeue(out var replay), "Recorded item must follow the old native item.");
+        using (fence.ConsumeHandoff(replay)) Check(fence.EventTime == 3, "Recorded handoff must retain its time after old native work.");
+        Check(fence.IsSettled, "Stale native bookkeeping must not hold the recording fence.");
+        using (fence.Dispatch(4)) fence.Enqueue(queue, new WorkItem(200));
+        using (fence.Dispatch(4.001)) fence.Enqueue(queue, new WorkItem(200));
+        Check(queue.TryDequeue(out var first), "Duplicate payload fixture must receive its first item.");
+        using (fence.ConsumeHandoff(first)) Check(fence.EventTime == 4, "Equal payloads must consume receipts in FIFO order.");
+        Check(queue.TryDequeue(out var second), "Duplicate payload fixture must receive its second item.");
+        using (fence.ConsumeHandoff(second)) Check(fence.EventTime == 4.001, "Equal payloads must keep distinct recorded times.");
+        Check(fence.IsSettled, "Every duplicate-payload receipt must settle exactly once.");
+    }
+    private readonly struct WorkItem { internal readonly int Value; internal WorkItem(int value) => Value = value; }
+    private static class QueueFixture
+    {
+        private static int counter;
+        private static void History(ConcurrentQueue<long> queue, long now)
+        { while (queue.TryPeek(out long time) && now - time > 1000) queue.TryDequeue(out _); }
+        private static void Worker(ConcurrentQueue<WorkItem> queue)
+        { while (queue.TryDequeue(out WorkItem item)) Process(item); }
+        private static void Process(WorkItem item)
+        {
+            for (int i = 0; i < item.Value; i++)
+            {
+                if (i % 2 == 0) counter += i; else counter -= i;
+                if (counter < -100) counter = item.Value;
+                if (counter > 100) counter = -item.Value;
+            }
+        }
     }
 }

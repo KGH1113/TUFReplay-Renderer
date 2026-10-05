@@ -22,6 +22,7 @@ public sealed class RecordedReplayDriver : IRenderReplayDriver, IRenderOverlaySy
   private SharedOverlayInput overlays;
   public bool OverlayWorkSettled => OptionalModClock.Settled;
   public long OverlayWorkRevision => OptionalModClock.WorkRevision;
+  public string OverlayPendingWork => OptionalModClock.PendingWork;
   public void OverlayRefreshFrameCompleted() => overlays?.BeforeFrame();
   private RenderTimeline timeline;
   private bool prepared;

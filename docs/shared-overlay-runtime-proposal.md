@@ -20,6 +20,9 @@ Between-frame taps retain distinct down/up timestamps even if delivered together
 - `OverlayWorkFence`: propagation of event timestamps through managed queues;
   a dequeued event stays pending until its consumer completes. Pending text work
   also keeps the frame from being captured.
+- `OverlayQueuePlan`: separates peek/expiry history queues from drainable work.
+  Existing long-lived workers use observed finite per-item handoffs, so their
+  already-running queue loops do not need replacement or a mod-specific restart.
 - `SharedOverlayInput`: common SkyHook dispatch, virtual held/down/up
   state, temporary physical-input exclusion and key releases during cleanup.
 - `OverlayAssemblyDiscovery`: candidate assemblies identified from components on
@@ -78,6 +81,15 @@ Overlay screen dimensions and screen-space projection use the selected output si
 and capture camera. Presentation reads recognize editor replay only at overlay call sites.
 Refresh-only behavior still needs actual game validation.
 Native worker code and custom task schedulers are outside this managed queue contract.
+
+Per-item handlers are identified from queue element signatures and direct managed
+calls from the consumer, not by mod names. Their existing calls are observed with
+temporary prefixes/finalizers; the renderer never invokes them itself. Queues with
+peek-based retention are excluded from the capture fence. This conservative plan
+does not promise arbitrary worker/scheduler shapes. Timeout logs report actual
+queue count, tracked receipts and active handlers so bookkeeping failures can be
+distinguished from unfinished work. Fixtures cover workers running before replay,
+delayed handlers, stale native entries, duplicate payloads and exception cleanup.
 
 Without reading individual mod counter fields, native cumulative counters and persistence
 follow the mod's own replay policy. Preserving them universally requires a separate

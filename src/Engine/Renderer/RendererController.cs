@@ -601,7 +601,10 @@ namespace OrbitRender.Renderer
                                 {
                                     if (cancellation || State != RenderState.Rendering) yield break;
                                     if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
-                                        throw new InvalidOperationException("An overlay did not finish processing recorded input. Disable its overlay and try rendering again.");
+                                    {
+                                        Main.Entry.Logger.Error("Overlay input synchronization timeout: " + replaySession.OverlayPendingWork);
+                                        throw new InvalidOperationException("The renderer could not confirm that overlay input processing finished within 2 seconds. Restart the game and try rendering again. Details are in the game log.");
+                                    }
                                     yield return null;
                                     yield return EndOfFrame;
                                     replaySession.OverlayRefreshFrameCompleted();
