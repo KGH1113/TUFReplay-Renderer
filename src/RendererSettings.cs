@@ -8,7 +8,6 @@ namespace TUFReplayRenderer;
 public sealed class RendererSettings
 {
     public DmNoteSettings DmNote { get; set; } = new();
-    public string FfmpegExecutable { get; set; }
     public RenderOptions Defaults { get; set; } = new() { OutputDirectory = DefaultOutputDirectory() };
     public static string DefaultOutputDirectory()
     {

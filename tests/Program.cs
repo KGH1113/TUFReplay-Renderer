@@ -10,6 +10,7 @@ internal static class Program
     {
       ParserTests.Run();
       MediaTests.Run();
+      FfmpegIpcTests.Run();
       Console.WriteLine("Renderer parser, timeline and media tests passed.");
       return 0;
     }

@@ -45,9 +45,13 @@ force autoplay. Autoplay remains available through the controller API.
 
 `EmbeddedRenderEngine.GetOptions()` returns codec, encoder, speed, pixel format
 and ProRes profile choices with numeric limits and defaults. `Configure` accepts
-an FFmpeg executable and output folder. `GetFfmpegStatus()` performs local file
-discovery; `ValidateFfmpegAsync` runs a cancellable five-second `ffmpeg -version`
-probe. The caller returns results to the web. No FFmpeg binary is bundled.
+an internally resolved FFmpeg executable and output folder. `TufFfmpegClient`
+requests TUFReplay's consent modal and polls `media.ffmpeg.status` over IPC.
+The engine accepts only the verified executable inside TUFReplay's managed
+installation. `GetFfmpegStatus()` returns the cached installer state;
+`EnsureFfmpegAsync` waits for consent and installation, then runs a cancellable
+five-second `ffmpeg -version` probe. The renderer never searches installed
+executables or user paths. No FFmpeg binary is bundled.
 
 Codecs are H264, H265, VP9, AV1 and ProRes. Containers are MP4 for H264/H265/AV1,
 WebM for VP9 and MOV for ProRes. Hardware support is probed before capture; an

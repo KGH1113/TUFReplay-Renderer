@@ -16,6 +16,7 @@
     <Compile Include="../src/Media/MediaOverlay.cs" />
     <Compile Include="../src/Media/ExternalProcess.cs" />
     <Compile Include="../src/Media/SelectedMediaFiles.cs" />
+    <Compile Include="../src/Engine/TufFfmpegClient.cs" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 </Project>

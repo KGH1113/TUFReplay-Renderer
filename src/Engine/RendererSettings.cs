@@ -254,14 +254,8 @@ namespace OrbitRender
 
         internal string ResolveFfmpegExecutable(string modDirectory)
         {
-            var configured = Environment.ExpandEnvironmentVariables((FfmpegExecutable ?? string.Empty).Trim());
-            if (string.IsNullOrEmpty(configured)) return string.Empty;
-            if (Path.IsPathRooted(configured)) return Path.GetFullPath(configured);
-
-            // A relative path is resolved beside the mod. A bare command name
-            // is returned as-is so Process.Start can resolve it through PATH.
-            var local = Path.Combine(modDirectory, configured);
-            return File.Exists(local) ? Path.GetFullPath(local) : configured;
+            return !string.IsNullOrWhiteSpace(FfmpegExecutable) && Path.IsPathRooted(FfmpegExecutable)
+                ? Path.GetFullPath(FfmpegExecutable) : string.Empty;
         }
 
         private static RenderProfile GetPresetProfile(RendererPreset preset)

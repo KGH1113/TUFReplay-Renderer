@@ -177,11 +177,18 @@ public sealed class RenderJobController : MonoBehaviour
         backgroundWork = preparation;
         while (!preparation.IsCompleted) yield return null;
         var bundle = preparation.GetAwaiter().GetResult();
-        var ffmpegCheck = EmbeddedRenderEngine.ValidateFfmpegAsync(settings.FfmpegExecutable, job.Cancellation.Token);
-        backgroundWork = ffmpegCheck;
-        while (!ffmpegCheck.IsCompleted) yield return null;
-        EngineFfmpegStatus ffmpegStatus = ffmpegCheck.GetAwaiter().GetResult();
-        if (!ffmpegStatus.Available) throw new RenderOperationException("ffmpeg_unavailable", ffmpegStatus.Reason ?? "FFmpeg is unavailable. Install it or choose its executable in renderer settings.");
+        bool previousBackground = Application.runInBackground;
+        Application.runInBackground = true;
+        job.WaitingForFfmpeg = true;
+        EngineFfmpegStatus ffmpegStatus;
+        try {
+            var ffmpegCheck = EmbeddedRenderEngine.EnsureFfmpegAsync(job.Cancellation.Token);
+            backgroundWork = ffmpegCheck;
+            while (!ffmpegCheck.IsCompleted) yield return null;
+            ffmpegStatus = ffmpegCheck.GetAwaiter().GetResult();
+        }
+        finally { job.WaitingForFfmpeg = false; Application.runInBackground = previousBackground; }
+        if (!ffmpegStatus.Available) throw new RenderOperationException("ffmpeg_unavailable", ffmpegStatus.Reason ?? "Retry FFmpeg installation through TUFReplay in the game.");
         var options = job.Options;
         EmbeddedRenderEngine.Configure(ffmpegStatus.Path, options.OutputDirectory);
         var requestOptions = options.ToEngineOptions(null);

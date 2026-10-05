@@ -39,8 +39,9 @@ public static class Main
         try
         {
             Settings = RendererSettings.Load(entry.Path);
+            TufFfmpegClient.Initialize(UnityModManager.FindMod("TUFReplay")?.Path, AdofaiIpc.Main.Server?.Url);
             EmbeddedRenderEngine.Initialize(entry);
-            EmbeddedRenderEngine.Configure(Settings.FfmpegExecutable, Settings.Defaults.OutputDirectory);
+            EmbeddedRenderEngine.Configure(null, Settings.Defaults.OutputDirectory);
             host = new GameObject("TUFReplay-Renderer");
             UnityEngine.Object.DontDestroyOnLoad(host);
             Jobs = host.AddComponent<RenderJobController>();
@@ -55,6 +56,8 @@ public static class Main
                 DisplayName = "TUFReplay-Renderer", Version = Version,
                 AllowedOrigins = new[] { "https://tuforums.com", "https://tufreplay.impl1113.dev",
                     "https://tufreplay-dev.impl1113.dev", "https://tufreplay-auto.impl1113.dev",
+                    // Temporary Tailscale test origins.
+                    "https://guhyeons-macbook-pro.tail234c02.ts.net", "http://guhyeons-macbook-pro.tail234c02.ts.net",
                     "http://localhost", "http://127.0.0.1" }
             });
             ipc.RegisterMainThread("health.get", request => new {
@@ -113,7 +116,7 @@ public static class Main
             Settings.Defaults = previous;
             throw new RenderOperationException("renderer_preferences_unwritable", "The render settings could not be saved. Check write permission for the renderer mod folder.", null, error);
         }
-        EmbeddedRenderEngine.Configure(Settings.FfmpegExecutable, options.OutputDirectory);
+        EmbeddedRenderEngine.Configure(null, options.OutputDirectory);
         return GetConfiguration();
     }
     internal static void ValidateEncoding(RenderOptions options)

@@ -40,11 +40,11 @@ internal static class ExternalProcess
             RedirectStandardError = true, RedirectStandardOutput = true
         }};
         try {
-            if (!process.Start()) throw Failure("ffmpeg_unavailable", "FFmpeg could not start. Choose a working FFmpeg executable in the render settings.", executable);
+            if (!process.Start()) throw Failure("ffmpeg_unavailable", "TUFReplay's FFmpeg could not start. Retry its installation in the game.", executable);
         }
         catch (Win32Exception error) {
             throw Failure(error.NativeErrorCode == 5 || error.NativeErrorCode == 13 ? "render_access_denied" : "ffmpeg_unavailable",
-                "FFmpeg could not start. Check its executable path and permission, then try again.", error.Message);
+                "TUFReplay's FFmpeg could not start. Check its folder permissions and security software, then retry installation.", error.Message);
         }
         var recent = new StringBuilder();
         async Task Drain(System.IO.StreamReader reader, bool report)
@@ -103,7 +103,7 @@ internal static class ExternalProcess
         if (text.Contains("permission denied") || text.Contains("access is denied") || text.Contains("read-only file system"))
             return Failure("render_access_denied", "The video could not be saved with the current permission. Choose a writable save folder and try again.", detail);
         if (text.Contains("unknown encoder") || text.Contains("encoder not found"))
-            return Failure("render_encoder_unavailable", "This FFmpeg installation does not include the selected encoder. Choose another encoder or FFmpeg installation.", detail);
+            return Failure("render_encoder_unavailable", "The installed FFmpeg cannot use the selected encoder. Choose another encoder in render settings.", detail);
         if (text.Contains("error while opening encoder") || text.Contains("error initializing output stream")
             || text.Contains("no capable devices") || text.Contains("cannot load libcuda") || text.Contains("failed to initialise vaapi"))
             return Failure("render_encoder_failed", "The selected encoder could not encode the video. Select Software encoding or a compatible pixel format and try again.", detail);

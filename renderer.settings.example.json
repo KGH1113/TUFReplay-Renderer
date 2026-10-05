@@ -1,5 +1,4 @@
 {
-  "ffmpegExecutable": "/opt/homebrew/bin/ffmpeg",
   "defaults": {
     "outputDirectory": "/absolute/path/to/videos",
     "videoCodec": "H264",

@@ -60,24 +60,19 @@ public static class EmbeddedRenderEngine
         var settings = OrbitRender.Main.Settings ?? throw new InvalidOperationException("The render engine is not initialized.");
         if (ffmpegExecutable != null) settings.FfmpegExecutable = ffmpegExecutable;
         if (outputDirectory != null) settings.OutputDirectory = System.IO.Path.GetFullPath(outputDirectory);
-        string resolved = FindExecutable(settings.ResolveFfmpegExecutable(OrbitRender.Main.Entry.Path));
-        if (resolved != null) settings.FfmpegExecutable = resolved;
     }
 
     public static EngineFfmpegStatus GetFfmpegStatus()
     {
-        string configured = OrbitRender.Main.Settings?.ResolveFfmpegExecutable(OrbitRender.Main.Entry?.Path ?? "") ?? "";
-        string executable = FindExecutable(configured);
-        return new EngineFfmpegStatus { Available = executable != null, Path = executable ?? configured,
-            Reason = executable == null ? "FFmpeg was not found. Choose an installed FFmpeg executable in the web render settings." : null };
+        return TufFfmpegClient.Status;
     }
 
-    public static Task<EngineFfmpegStatus> ValidateFfmpegAsync(string executable, CancellationToken cancellation = default)
+    public static async Task<EngineFfmpegStatus> EnsureFfmpegAsync(CancellationToken cancellation = default)
     {
-        return Task.Run(() => {
+        EngineFfmpegStatus installed = await TufFfmpegClient.EnsureAsync(cancellation).ConfigureAwait(false);
+        return await Task.Run(() => {
             cancellation.ThrowIfCancellationRequested();
-            string resolved = FindExecutable(executable);
-            if (resolved == null) return new EngineFfmpegStatus { Available = false, Path = executable, Reason = "The FFmpeg executable does not exist. Choose the installed executable and try again." };
+            string resolved = installed.Path;
             try {
                 using var process = Process.Start(new ProcessStartInfo(resolved, "-version") {
                     UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
@@ -89,11 +84,11 @@ public static class EmbeddedRenderEngine
                 cancellation.ThrowIfCancellationRequested();
                 Task.WhenAll(stdout, stderr).GetAwaiter().GetResult();
                 bool valid = process.ExitCode == 0 && stdout.Result.StartsWith("ffmpeg version", StringComparison.OrdinalIgnoreCase);
-                return new EngineFfmpegStatus { Available = valid, Path = resolved, Reason = valid ? null : "This executable is not a working FFmpeg installation. Choose FFmpeg and try again." };
+                return new EngineFfmpegStatus { Available = valid, Path = resolved, Reason = valid ? null : "TUFReplay's FFmpeg could not run. Retry installation in the game and check your security software." };
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception exception) { return new EngineFfmpegStatus { Available = false, Path = resolved, Reason = exception.Message }; }
-        }, cancellation);
+        }, cancellation).ConfigureAwait(false);
     }
 
     public static string[] GetVideoEncodingArguments(RenderRequestOptions options)
@@ -161,19 +156,4 @@ public static class EmbeddedRenderEngine
         host.AddComponent<RendererController>();
     }
     private static void OnSceneLoaded(Scene scene, LoadSceneMode mode) { if (OrbitRender.Main.Enabled) CreateHost(); }
-    private static string FindExecutable(string configured)
-    {
-        configured = Environment.ExpandEnvironmentVariables((configured ?? "").Trim());
-        if (configured.Length > 0 && (configured.Contains(System.IO.Path.DirectorySeparatorChar) || configured.Contains(System.IO.Path.AltDirectorySeparatorChar)))
-            return File.Exists(configured) ? System.IO.Path.GetFullPath(configured) : null;
-        string name = configured.Length > 0 ? configured : (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg");
-        foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(System.IO.Path.PathSeparator)
-            .Concat(new[] { OrbitRender.Main.Entry?.Path, "/opt/homebrew/bin", "/usr/local/bin" }))
-        {
-            if (string.IsNullOrWhiteSpace(directory)) continue;
-            string candidate = System.IO.Path.Combine(directory, name);
-            if (File.Exists(candidate)) return System.IO.Path.GetFullPath(candidate);
-        }
-        return null;
-    }
 }

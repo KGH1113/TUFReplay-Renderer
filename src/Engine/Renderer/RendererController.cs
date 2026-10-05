@@ -1254,23 +1254,7 @@ namespace OrbitRender.Renderer
         {
             var configured = settings.ResolveFfmpegExecutable(Main.Entry.Path);
             if (!string.IsNullOrEmpty(configured)) return configured;
-
-            var windows = Application.platform == RuntimePlatform.WindowsPlayer
-                || Application.platform == RuntimePlatform.WindowsEditor;
-            var names = windows ? new[] { "ffmpeg.exe", "ffmpeg" } : new[] { "ffmpeg", "ffmpeg.exe" };
-            var candidates = new[]
-            {
-                Path.Combine(Main.Entry.Path, names[0]),
-                Path.Combine(Main.Entry.Path, names[1])
-            };
-            foreach (var local in candidates)
-            {
-                if (File.Exists(local)) return local;
-            }
-
-            // Let the operating system resolve a system-installed FFmpeg from
-            // PATH. This is the normal setup on macOS and Linux.
-            return names[0];
+            throw new FileNotFoundException("Install FFmpeg through TUFReplay before rendering.");
         }
 
         internal static string FormatDuration(double seconds)
