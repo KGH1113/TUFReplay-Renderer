@@ -10,7 +10,7 @@ internal static class Program
 {
     private static int Main()
     {
-        try { ContractMetadataTests.Run(); Run(); BarrierFailure(); Console.WriteLine("PASS: installed JipperRP signatures and prefix lifecycle fixture: worker barrier/failure recovery, exact ticks, short taps, synchronous text, save isolation and restoration."); return 0; }
+        try { ContractMetadataTests.Run(); Run(); BarrierFailure(); GhostifyFixture.Run(); Console.WriteLine("PASS: JipperRP/Ghostify contracts and prefix lifecycle fixtures: worker recovery, hand/foot bindings, duplicate downs, exact ticks, synchronous text, save isolation and restoration."); return 0; }
         catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
     }
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }

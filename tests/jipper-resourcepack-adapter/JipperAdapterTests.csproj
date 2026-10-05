@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="../../src/Replay/RecordedEvents.cs" />
     <Compile Include="../../src/Replay/JipperResourcePackReplayAdapter.cs" />
+    <Compile Include="../../src/Replay/GhostifyOverlayReplayAdapter.cs" />
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(ManagedDir)/UnityEngine.CoreModule.dll</HintPath></Reference>
   </ItemGroup>
 </Project>

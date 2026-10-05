@@ -226,7 +226,7 @@ namespace OrbitRender.Renderer
                 var captureCanvasSet = selection.Capture;
                 if (captureCanvasSet.Count > 0)
                     CreateHudOverlay(captureCanvasSet);
-                foreach (var canvas in UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+                foreach (var canvas in UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None))
                 {
                     // Keep world-space level decorations; exclude editor/game HUD
                     // and third-party screen-space overlays from the three cameras.

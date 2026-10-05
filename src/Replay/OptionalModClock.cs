@@ -54,6 +54,7 @@ internal sealed class OptionalModClock : IDisposable
     {
         string name = assembly.GetName().Name;
         return name == "KeyViewer" || name == "JipperKeyViewer" || name == "JipperResourcePack"
+            || assembly.GetType("DonQuixoteOverlay.KeyViewerContents.KeyViewer") != null
             || name.StartsWith("Overlayer", StringComparison.Ordinal) || name.StartsWith("ImplResourcePack", StringComparison.Ordinal);
     }
 

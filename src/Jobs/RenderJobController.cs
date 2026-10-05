@@ -366,8 +366,8 @@ public sealed class RenderJobController : MonoBehaviour
         }
     }
 
-    private static IEnumerable<Canvas> CaptureOverlays() => UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
-        .Where(canvas => canvas != null && canvas.isRootCanvas && canvas.enabled && canvas.gameObject.activeInHierarchy
+    private static IEnumerable<Canvas> CaptureOverlays() => UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+        .Where(canvas => canvas != null && canvas.isRootCanvas && canvas.enabled
             && canvas.renderMode == RenderMode.ScreenSpaceOverlay
             && canvas.gameObject.scene.name == "DontDestroyOnLoad" && !IsControlCanvas(canvas))
         .Concat(ReplayHitErrorMeter.CaptureCanvases()).Distinct();

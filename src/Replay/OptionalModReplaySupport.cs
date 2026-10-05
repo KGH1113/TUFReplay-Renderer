@@ -27,6 +27,9 @@ public static class OptionalModCapabilities
     foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
     {
       string name = assembly.GetName().Name;
+      if (assembly.GetType("DonQuixoteOverlay.KeyViewerContents.KeyViewer") != null)
+        result.Add(new OverlayCapability { Mod = name, InputReplay = true, Status = "requires-runtime-verification",
+          Detail = "Ghostify recorded hand/foot/ghost input, render clocks, native text updates and temporary counters are supported. An in-game visual comparison is required." });
       switch (name)
       {
         case "KeyViewer":
@@ -72,6 +75,8 @@ internal sealed class OptionalModReplaySupport : IDisposable
   private readonly Dictionary<object, KeyBinding> keyBindings = new();
   private IDictionary keyViewerFlags;
   private JipperResourcePackReplayAdapter resourcePack;
+  private GhostifyOverlayReplayAdapter ghostify;
+  private OptionalOverlayPresentation presentation;
   private bool disposed;
   private bool injectingInput;
   private long previousKpsVideoUs;
@@ -82,11 +87,15 @@ internal sealed class OptionalModReplaySupport : IDisposable
   internal void Begin()
   {
     active = this;
+    presentation = new OptionalOverlayPresentation();
+    presentation.Begin();
     foreach (string item in OptionalModCapabilities.Warnings()) warning(item);
     TryAdapter("KeyViewer", BeginKeyViewer);
     TryAdapter("JipperKeyViewer", BeginJipperKeyViewer);
     resourcePack = new JipperResourcePackReplayAdapter(driver, warning);
     resourcePack.Begin();
+    ghostify = new GhostifyOverlayReplayAdapter(driver);
+    ghostify.Begin();
   }
 
   private void TryAdapter(string name, Action<Assembly> begin)
@@ -452,12 +461,17 @@ internal sealed class OptionalModReplaySupport : IDisposable
     internal KeyCode Key;
   }
 
-  internal void BeforeFrame() { }
-  internal void AfterFrame(double deltaTime) => resourcePack?.AfterFrame(deltaTime);
+  internal void BeforeFrame() => ghostify?.BeforeFrame();
+  internal void AfterFrame(double deltaTime)
+  {
+    resourcePack?.AfterFrame(deltaTime);
+    ghostify?.AfterFrame();
+    presentation?.AfterFrame();
+  }
   internal void Apply(RecordedKeyEvent input, KeyCode code)
   {
     injectingInput = true;
-    try { foreach (var adapter in inputAdapters) adapter(input, code); resourcePack?.Apply(input, code); }
+    try { foreach (var adapter in inputAdapters) adapter(input, code); resourcePack?.Apply(input, code); ghostify?.Apply(input, code); }
     finally { injectingInput = false; }
   }
 
@@ -466,7 +480,9 @@ internal sealed class OptionalModReplaySupport : IDisposable
     if (disposed) return;
     disposed = true;
     Exception failure = null;
-    try { resourcePack?.Dispose(); } catch (Exception exception) { failure = exception; }
+    try { ghostify?.Dispose(); } catch (Exception exception) { failure = exception; }
+    try { presentation?.Dispose(); } catch (Exception exception) { failure ??= exception; }
+    try { resourcePack?.Dispose(); } catch (Exception exception) { failure ??= exception; }
     for (int index = restore.Count - 1; index >= 0; index--)
       try { restore[index](); } catch (Exception exception) { failure ??= exception; }
     active = null;

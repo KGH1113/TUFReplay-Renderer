@@ -45,9 +45,51 @@ internal static class ContractMetadataTests
         source.Method("JipperResourcePack.KeyViewerContents.RainManager", "Update", "System.Void");
         using var version = new Contract(Environment.GetEnvironmentVariable("JIPPER_RP_VERSION_DLL") ?? Path.Combine(mod, "VersionSafe", "JipperResourcePack.VersionSafe.R149.dll"));
         version.Method("JipperResourcePack.VersionSafe", "UnityKeyToSkyHookKey", "SkyHook.KeyLabel", "UnityEngine.KeyCode");
+        version.Method("JipperResourcePack.VersionSafe", "GetHitMarginsCount", "System.Int32[]");
         string managed = Environment.GetEnvironmentVariable("MANAGED_DIR") ?? Path.Combine(game, "ADanceOfFireAndIce.app", "Contents", "Resources", "Data", "Managed");
         using var skyHook = new Contract(Path.Combine(managed, "SkyHook.Unity.dll"));
         skyHook.Method("SkyHook.SkyHookKeyMapper", "KeyLabelToNativeKeyCode", "System.UInt16", "SkyHook.KeyLabel");
+        source.Method("JipperResourcePack.OverlayContents.Overlay", "UpdateJudgement", "System.Void", "System.Int32");
+        source.Method("JipperResourcePack.OverlayContents.Overlay", "SetupTextManager", "System.Void");
+        string ghostPath = Environment.GetEnvironmentVariable("GHOSTIFY_OVERLAY_DLL");
+        if (!string.IsNullOrEmpty(ghostPath)) Ghostify(ghostPath);
+    }
+    private static void Ghostify(string path)
+    {
+        using var source = new Contract(path);
+        const string prefix = "DonQuixoteOverlay.KeyViewerContents.";
+        string viewer = prefix + "KeyViewer", key = prefix + "Key", count = prefix + "KeyCountData", state = prefix + "KeyTransitionState";
+        source.Method(viewer, "WorkUnity", "System.Void", "UnityEngine.KeyCode", "System.Boolean", "System.Int64");
+        source.Method(viewer, "Update", "System.Void");
+        source.Method(viewer, "UpdateCounters", "System.Void");
+        source.Method(viewer, "BeginGameplayRun", "System.Void");
+        source.Method(viewer, "PumpInput", "System.Void");
+        source.Method(viewer, "ResetTransient", "System.Void", "System.Boolean");
+        source.Method(viewer, "OnApplicationFocus", "System.Void", "System.Boolean");
+        source.Method(viewer, "OnKeyEvent", "System.Void", "SkyHook.SkyHookEvent");
+        source.Method(viewer, "ObserveRawEvent", "System.Void", "SkyHook.SkyHookEvent");
+        source.Method(viewer, "get_CurrentTicks", "System.Int64");
+        source.Field(viewer, "_shownCounts", "System.Int64[]", 0);
+        source.Field(viewer, "_state", state, FieldAttributes.InitOnly);
+        source.Field(viewer, "_lastTotalCount", "System.Int64", 0);
+        source.Field(viewer, "_lastKpsCount", "System.Int32", 0);
+        source.Field(viewer, "_keyState", "System.Boolean[]", FieldAttributes.InitOnly);
+        foreach (string field in new[] { "_focused", "_visible", "_suspended", "_rawGhostInput" }) source.Field(viewer, field, "System.Boolean", 0);
+        source.Field(state, "_state", "System.Boolean[]", FieldAttributes.InitOnly);
+        source.Field(state, "_startHeld", "System.Boolean[]", FieldAttributes.InitOnly);
+        source.Method(count, "Flush", "System.Void", "System.Int64", "System.Boolean");
+        source.Method(count, "Save", "System.Void");
+        source.Method(count, ".ctor", "System.Void");
+        source.Field(count, "Count", "System.Int64[]", 0);
+        source.Method(key, "UpdateKey", "System.Void", "System.Boolean");
+        foreach (string field in new[] { "_requested", "_current", "_dirty" }) source.Field(key, field, "System.Boolean", 0);
+        source.Method(prefix + "RainPool", ".ctor", "System.Void", "UnityEngine.RectTransform");
+        source.Method(prefix + "RainPool", "GetOrNewRain", prefix + "Rain", "System.Boolean");
+        source.Field(prefix + "RainPool", "_layers", "UnityEngine.RectTransform[]", FieldAttributes.InitOnly);
+        source.Method(prefix + "RainManager", "Tick", "System.Void");
+        source.Method("DonQuixoteOverlay.OverlayController", "Update", "System.Void");
+        source.Field("DonQuixoteOverlay.OverlayController", "_metadataNextUpdate", "System.Single", 0);
+        source.Method("DonQuixoteOverlay.OverlayController", "ErrorMeterAnchor", "UnityEngine.Vector2", "scrController");
     }
     private sealed class Contract : IDisposable
     {

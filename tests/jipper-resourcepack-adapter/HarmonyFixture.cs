@@ -16,7 +16,7 @@ public sealed class Harmony
 {
     public string Id { get; }
     public Harmony(string id) { Id = id; }
-    public void Patch(MethodInfo original, HarmonyMethod prefix = null, HarmonyMethod postfix = null)
+    public void Patch(MethodBase original, HarmonyMethod prefix = null, HarmonyMethod postfix = null)
     { if (prefix != null) FixturePatches.Add(Id, original, prefix.method); }
     public void UnpatchAll(string id) { FixturePatches.Remove(id); }
 }
@@ -25,12 +25,13 @@ public static class AccessTools
     private const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
     public static FieldInfo Field(Type type, string name) => type.GetField(name, All);
     public static PropertyInfo Property(Type type, string name) => type.GetProperty(name, All);
+    public static MethodInfo PropertyGetter(Type type, string name) => Property(type, name)?.GetGetMethod(true);
     public static MethodInfo Method(Type type, string name, Type[] parameters = null) => parameters == null ? type.GetMethods(All).Single(m => m.Name == name) : type.GetMethod(name, All, null, parameters, null);
 }
 internal static class FixturePatches
 {
     private static readonly ConcurrentDictionary<string, (string owner, MethodInfo prefix)> patches = new();
-    internal static void Add(string owner, MethodInfo method, MethodInfo prefix) => patches[method.DeclaringType.FullName + "." + method.Name] = (owner, prefix);
+    internal static void Add(string owner, MethodBase method, MethodInfo prefix) => patches[method.DeclaringType.FullName + "." + method.Name] = (owner, prefix);
     internal static void Remove(string owner) { foreach (var item in patches) if (item.Value.owner == owner) patches.TryRemove(item.Key, out _); }
     internal static bool Allow(Type type, string name, object instance, object[] inputs, out object result)
     {
