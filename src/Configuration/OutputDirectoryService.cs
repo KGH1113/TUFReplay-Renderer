@@ -24,6 +24,7 @@ internal sealed class OutputDirectoryService : IDisposable
     private readonly string platform;
     internal OutputDirectoryService(string platformName) { platform = platformName; }
 
+    internal event Action<object> Changed;
     internal object Choose(string initialPath)
     {
         lock (sync) {
@@ -33,6 +34,7 @@ internal sealed class OutputDirectoryService : IDisposable
             var selection = new Selection();
             selection.Task = Task.Run(() => Pick(initialPath, selection.Cancellation.Token));
             selections[selection.Id] = selection;
+            _ = selection.Task.ContinueWith(_ => Changed?.Invoke(Status(selection.Id)), TaskScheduler.Default);
             return new { selectionId = selection.Id, pending = true, outputDirectory = (string)null };
         }
     }

@@ -7,6 +7,6 @@
   "AssemblyName": "TUFReplay-Renderer.dll",
   "EntryMethod": "TUFReplayRenderer.Main.Load",
   "Requirements": [
-    "AdofaiIpc"
+    "AdofaiIpc-1.0.0"
   ]
 }

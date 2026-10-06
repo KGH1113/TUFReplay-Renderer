@@ -5,7 +5,7 @@
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>TUFReplay-Renderer</AssemblyName>
-    <Version>0.1.0-beta.3</Version>
+    <Version>0.1.0-beta.4</Version>
     <RootNamespace>TUFReplayRenderer</RootNamespace>
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
@@ -14,7 +14,7 @@
     <ModManagerDir Condition="'$(ModManagerDir)' == ''">$(AdofaiManaged)/UnityModManager</ModManagerDir>
     <UnityModManagerDll Condition="'$(UnityModManagerDll)' == ''">$(ModManagerDir)/UnityModManager.dll</UnityModManagerDll>
     <HarmonyDll Condition="'$(HarmonyDll)' == ''">$(ModManagerDir)/0Harmony.dll</HarmonyDll>
-    <AdofaiIpcDll Condition="'$(AdofaiIpcDll)' == ''">$(GameDir)/Mods/AdofaiIpc/Runtime/versions/0.4.1/AdofaiIpc.dll</AdofaiIpcDll>
+    <AdofaiIpcDll Condition="'$(AdofaiIpcDll)' == ''">$(GameDir)/Mods/AdofaiIpc/AdofaiIpc.dll</AdofaiIpcDll>
   </PropertyGroup>
   <ItemGroup>
     <!-- Keep historical adapter sources available to their lifecycle fixtures,

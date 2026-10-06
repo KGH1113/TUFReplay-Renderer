@@ -1,9 +1,8 @@
 using System;
 using System.IO;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using AdofaiIpc;
+using TUFReplayRenderer.Ports;
 using Newtonsoft.Json.Linq;
 using TUFReplayRenderer.Contracts;
 using TUFReplayRenderer.Integrations.DmNote;
@@ -24,20 +23,22 @@ internal static class Program
             await ExternalProcess.Run("ffmpeg", new[] { "-v", "error", "-i", image, "-frames:v", "1", "-pix_fmt", "rgba", "-f", "rawvideo", rawImage }, CancellationToken.None);
             var bundle = new RecordingBundle { Directory = directory };
             File.WriteAllText(bundle.ResolveFile("inputs.csv"), "timeUs,key,down,sequence\n-500000,A,1,0\n-480000,A,0,1\n20000,S,1,2\n40000,S,0,3\n");
-            using var bridge = new DmNoteRenderBridge(); var ipc = new AdofaiIpcNamespace(); bridge.Register(ipc);
+            DateTime now = DateTime.UtcNow;
+            var deadlines = new FakeDeadlines();
+            using var ipc = new AppMessages(); using var bridge = new DmNoteRenderBridge(ipc, () => now, deadlines.Schedule);
             Check(!bridge.IsAvailable, "An app must announce native capture before rendering.");
             bool rejected = false;
-            try { ipc.Call("dmnote.hello", new JObject { ["applicationId"] = "bad", ["protocolVersion"] = 99 }); }
+            try { bridge.Attach(AppMessages.Identity, new JObject { ["applicationId"] = "bad", ["protocolVersion"] = 99 }); }
             catch (DmNoteRenderException error) { rejected = error.Code == "dmnote_protocol_unsupported"; }
             Check(rejected, "Unsupported protocols need an actionable code.");
             JObject legacy = Hello(); legacy.Remove("multiViewerCapture");
-            ipc.Call("dmnote.hello", legacy);
+            bridge.Attach(AppMessages.Identity, legacy);
             try {
                 await bridge.BeginSessionAsync(8, 8, "hand", 0, CancellationToken.None, new JObject { ["automaticPlacement"] = true });
                 throw new Exception("An old app must not silently omit the foot viewer.");
             }
             catch (DmNoteRenderException error) { Check(error.Code == "dmnote_protocol_unsupported" && error.Message.Contains("Update ImplDmNote"), "One-viewer apps need an actionable update message."); }
-            ipc.Call("dmnote.hello", Hello()); Check(bridge.IsAvailable, "A compatible native app must become available.");
+            bridge.Attach(AppMessages.Identity, Hello()); Check(bridge.IsAvailable, "A compatible native app must become available.");
             using var app = new FakeApp(ipc, directory, image);
             Task worker = app.Run();
             app.BeginFailure = "render-game-window-missing: The game's window bounds could not be read.";
@@ -53,7 +54,7 @@ internal static class Program
             DmNoteRenderSession session = await bridge.BeginSessionAsync(8, 8, "hand", -200000, CancellationToken.None);
             Check(app.Gated, "Preparation must gate live inputs before the game pass.");
             rejected = false;
-            try { ipc.Call("dmnote.hello", new JObject { ["applicationId"] = "other", ["protocolVersion"] = 1, ["nativeCapture"] = true }); }
+            try { bridge.Attach(new AppPeer("foreign", "foreign"), new JObject { ["applicationId"] = "other", ["protocolVersion"] = 2, ["nativeCapture"] = true }); }
             catch (DmNoteRenderException error) { rejected = error.Code == "dmnote_busy"; }
             Check(rejected, "Another app cannot take an active session.");
             var timeline = new RenderTimeline(100000, 2, null);
@@ -108,19 +109,46 @@ internal static class Program
             await session.EndAsync(); Check(!app.Gated, "Cancellation must release the app gate while a frame is pending.");
             Check(System.IO.Directory.GetFiles(directory, "dmnote-*-alpha.mkv").Length == 0
                 && System.IO.Directory.GetFiles(directory, "dmnote-*-alpha.mkv.partial-*").Length == 0, "Cancellation must remove both incomplete alpha outputs.");
-            typeof(DmNoteRenderBridge).GetField("lastContact", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(bridge, DateTime.UtcNow.AddSeconds(-9));
-            Check(!bridge.IsAvailable, "An expired app heartbeat must stop being offered.");
+            app.HangFrame = false;
+            session = await bridge.BeginSessionAsync(8, 8, "hand", 0, CancellationToken.None);
+            int availabilityChanges = 0, ownerCancellations = 0;
+            bridge.AvailabilityChanged += () => availabilityChanges++;
+            bridge.Disconnected += () => ownerCancellations++;
+            app.HangFrame = true;
+            Action beforePulse = deadlines.Latest;
+            now = now.AddSeconds(7);
+            app.Pulse();
+            beforePulse();
+            Check(bridge.IsAvailable && availabilityChanges == 0 && ownerCancellations == 0,
+                "An explicit wall-clock pulse invalidates the previous owner deadline.");
+            now = now.AddSeconds(7);
+            deadlines.Latest();
+            Check(bridge.IsAvailable && deadlines.LatestDelay == TimeSpan.FromSeconds(1),
+                "An early scheduler callback rearms only the remaining lease time.");
+            Task pendingFrame = bridge.CommandAsync("frame", new JObject { ["frameIndex"] = 999 }, CancellationToken.None);
+            now = now.AddSeconds(2);
+            Action expiredDeadline = deadlines.Latest;
+            expiredDeadline();
+            try { await pendingFrame; throw new Exception("An expired owner must fail the pending frame."); }
+            catch (DmNoteRenderException error) { Check(error.Code == "dmnote_disconnected", "Expired domain leases retain the disconnect code."); }
+            Check(!bridge.IsAvailable && availabilityChanges == 1 && ownerCancellations == 1, "Lease expiry must push unavailable and cancel the active owner even while its transport is alive.");
+            bridge.Attach(AppMessages.Identity, Hello());
+            expiredDeadline();
+            Check(bridge.IsAvailable && availabilityChanges == 2, "An old lease deadline cannot release a newly attached owner.");
+            Action disposedDeadline = deadlines.Latest;
+            bridge.Dispose(); disposedDeadline();
+            Check(availabilityChanges == 2 && deadlines.Active == 0, "Disposal invalidates queued deadlines without another availability event.");
             app.Stop(); await worker;
             Console.WriteLine("PASS: native app discovery/ownership and upgrade guidance, synchronized hand/foot alpha streams and placement, missing-foot rejection, exact timeline and negative inputs, frame ACK, cancellation cleanup and stale availability.");
         }
         finally { System.IO.Directory.Delete(directory, true); }
     }
 
-    private static JObject Hello() => new JObject { ["applicationId"] = "fixture", ["protocolVersion"] = 1, ["applicationVersion"] = "test", ["nativeCapture"] = true, ["multiViewerCapture"] = true, ["platform"] = "fixture" };
+    private static JObject Hello() => new JObject { ["applicationId"] = "fixture", ["protocolVersion"] = 2, ["applicationVersion"] = "test", ["nativeCapture"] = true, ["multiViewerCapture"] = true, ["platform"] = "fixture" };
 
     private sealed class FakeApp : IDisposable
     {
-        private readonly AdofaiIpcNamespace ipc; private readonly string directory, image;
+        private readonly AppMessages ipc; private readonly string directory, image;
         private readonly System.Collections.Generic.HashSet<string> handled = new();
         private volatile bool stopped;
         public bool Gated, HangFrame, Raw, Multi, IncludeVisibleViewers, OmitFoot;
@@ -128,18 +156,18 @@ internal static class Program
         public int Ends;
         public readonly JArray Frames = new();
         public readonly TaskCompletionSource<bool> FrameWaiting = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public FakeApp(AdofaiIpcNamespace ipc, string directory, string image) { this.ipc = ipc; this.directory = directory; this.image = image; }
+        public FakeApp(AppMessages ipc, string directory, string image) { this.ipc = ipc; this.directory = directory; this.image = image; }
         public async Task Run() {
             while (!stopped) {
-                JObject command = ipc.Call("dmnote.poll", new JObject { ["applicationId"] = "fixture" })["command"] as JObject;
-                if (command != null && handled.Add((string)command["id"])) {
+                JObject command = await ipc.Next();
+                if (command == null) break;
+                if (handled.Add((string)command["id"])) {
                     JObject result = new(); string method = (string)command["method"];
                     if (method == "begin") {
                         Gated = true;
                         IncludeVisibleViewers = (bool?)command["params"]["includeVisibleViewers"] == true;
                         if (BeginFailure != null) {
-                            ipc.Call("dmnote.reply", new JObject { ["applicationId"] = "fixture", ["id"] = command["id"],
-                                ["error"] = new JObject { ["code"] = "dmnote_capture_failed", ["message"] = BeginFailure } });
+                            ipc.Reply("dmnote.failed", (string)command["id"], new JObject { ["code"] = "dmnote_capture_failed", ["message"] = BeginFailure });
                             continue;
                         }
                         result = new JObject { ["width"] = 8, ["height"] = 8, ["frameDirectory"] = directory, ["frameFormat"] = Raw ? "rgba" : "png", ["layout"] = new JObject { ["left"] = .25, ["top"] = .5, ["scale"] = 1 } };
@@ -156,7 +184,7 @@ internal static class Program
                     }
                     if (method == "end") { Ends++; Gated = false; result["ended"] = true; }
                     if (method == "frame") {
-                        if (HangFrame) { FrameWaiting.TrySetResult(true); await Task.Delay(1); continue; }
+                        if (HangFrame) { FrameWaiting.TrySetResult(true); continue; }
                         Check(Gated, "Native frames must be isolated from live input.");
                         Frames.Add(command["params"].DeepClone());
                         string frameFile = Raw ? "frame.rgba" : "frame.png";
@@ -173,12 +201,44 @@ internal static class Program
                             result["frames"] = frames;
                         }
                     }
-                    ipc.Call("dmnote.reply", new JObject { ["applicationId"] = "fixture", ["id"] = command["id"], ["result"] = result });
+                    ipc.Reply(method == "begin" ? "dmnote.begun" : method == "frame" ? "dmnote.frame.ready" : method == "end" ? "dmnote.ended" : "dmnote.reset", (string)command["id"], result);
                 }
-                await Task.Delay(1);
             }
         }
-        public void Stop() { stopped = true; }
+        public void Pulse() => ipc.Reply("dmnote.pulse", null, new JObject { ["applicationId"] = "fixture" });
+        public void Stop() { stopped = true; Gated = false; ipc.Stop(); }
         public void Dispose() => Stop();
     }
+    private sealed class AppMessages : IDmNoteMessages
+    {
+        internal static readonly AppPeer Identity = new("fixture-peer", "fixture-connection");
+        private readonly System.Threading.Channels.Channel<JObject> commands = System.Threading.Channels.Channel.CreateUnbounded<JObject>();
+        public event Action<AppReply> Message;
+        public event Action<AppPeer> Disconnected;
+        public string Send(AppPeer peer, string command, JObject payload) {
+            Check(Identity.Matches(peer), "Commands must reach the authenticated owner.");
+            string id = Guid.NewGuid().ToString("N");
+            commands.Writer.TryWrite(new JObject { ["id"] = id, ["method"] = command.Substring("dmnote.".Length), ["params"] = payload });
+            return id;
+        }
+        internal async Task<JObject> Next() => await commands.Reader.WaitToReadAsync() ? await commands.Reader.ReadAsync() : null;
+        internal void Reply(string name, string id, JObject payload) => Message?.Invoke(new AppReply(Identity, name, id, payload));
+        internal void Stop() => commands.Writer.TryComplete();
+        public void Dispose() => Stop();
+    }
+
+    private sealed class FakeDeadlines
+    {
+        private readonly System.Collections.Generic.List<Ticket> tickets = new();
+        internal Action Latest => tickets[tickets.Count - 1].Elapsed;
+        internal TimeSpan LatestDelay => tickets[tickets.Count - 1].Delay;
+        internal int Active => System.Linq.Enumerable.Count(tickets, ticket => !ticket.Disposed);
+        internal IDisposable Schedule(TimeSpan delay, Action elapsed) { var ticket = new Ticket(delay, elapsed); tickets.Add(ticket); return ticket; }
+        private sealed class Ticket : IDisposable {
+            internal readonly Action Elapsed; internal readonly TimeSpan Delay; internal bool Disposed;
+            internal Ticket(TimeSpan delay, Action elapsed) { Delay = delay; Elapsed = elapsed; }
+            public void Dispose() { Disposed = true; }
+        }
+    }
+
 }

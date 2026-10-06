@@ -23,6 +23,25 @@ public sealed class RenderJobController : MonoBehaviour
 {
     private readonly ConcurrentDictionary<string, RenderJob> jobs = new ConcurrentDictionary<string, RenderJob>();
     private RenderJob active;
+    internal event Action<object> StatusChanged;
+    private string lastPublishedState;
+    private double lastPublishedProgress = -1;
+    private bool lastPublishedFocus, lastPublishedFfmpeg;
+    private long nextPublish;
+    internal object[] Snapshots() => jobs.Values.Select(job => job.Snapshot()).ToArray();
+    private void Update()
+    {
+        RenderJob job = active;
+        if (job == null) return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool changed = job.State != lastPublishedState || job.Progress != lastPublishedProgress
+            || job.WaitingForGameFocus != lastPublishedFocus || job.WaitingForFfmpeg != lastPublishedFfmpeg;
+        if (!changed || (job.State == lastPublishedState && now < nextPublish)) return;
+        nextPublish = now + System.Diagnostics.Stopwatch.Frequency / 10;
+        lastPublishedState = job.State; lastPublishedProgress = job.Progress;
+        lastPublishedFocus = job.WaitingForGameFocus; lastPublishedFfmpeg = job.WaitingForFfmpeg;
+        StatusChanged?.Invoke(job.Snapshot());
+    }
     private string directory;
     private RendererSettings settings;
     private RecordedReplayDriver activeDriver;
@@ -80,6 +99,7 @@ public sealed class RenderJobController : MonoBehaviour
             return Error("output_directory_unwritable", "The render workspace could not be created in the save folder. Check permissions and free space.");
         }
         jobs.TryAdd(job.Id, job); active = job;
+        lastPublishedState = null; lastPublishedProgress = -1;
         executingJob = true;
         routine = StartCoroutine(Guarded(Run(job, manifest, options.Width, options.Height, options.VideoFps), job));
         if (!executingJob) routine = null;
@@ -110,10 +130,10 @@ public sealed class RenderJobController : MonoBehaviour
         string path = job.Output;
         long length = new FileInfo(path).Length;
         string extension = Path.GetExtension(path).ToLowerInvariant();
-        return new IpcDownloadResponse(extension == ".webm" ? "video/webm" : extension == ".mov" ? "video/quicktime" : "video/mp4", length, Path.GetFileName(path), stream => {
+        return new IpcDownloadSource(stream => {
             using var file = File.OpenRead(path);
             file.CopyTo(stream, 128 * 1024);
-        });
+        }, length, Path.GetFileName(path), extension == ".webm" ? "video/webm" : extension == ".mov" ? "video/quicktime" : "video/mp4");
     }
 
     private IEnumerator Guarded(IEnumerator inner, RenderJob job)

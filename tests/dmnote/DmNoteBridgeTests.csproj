@@ -3,6 +3,7 @@
   <ItemGroup>
     <Compile Include="*.cs" />
     <Compile Include="../../src/Integrations/DmNote/*.cs" />
+    <Compile Include="../../src/Ports/DmNoteMessages.cs" />
     <Compile Include="../../src/Media/RenderTimeline.cs" />
     <Compile Include="../../src/Media/MediaOverlay.cs" />
     <Compile Include="../../src/Media/ExternalProcess.cs" />

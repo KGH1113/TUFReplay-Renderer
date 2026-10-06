@@ -2,107 +2,140 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using AdofaiIpc;
 using Newtonsoft.Json.Linq;
+using TUFReplayRenderer.Ports;
 
 namespace TUFReplayRenderer.Integrations.DmNote;
 
-// Reverse RPC over the existing game IPC server: the app pulls one command and
-// acknowledges it. No listener, browser runtime, or app source checkout is needed.
+// One authenticated app connection receives commands directly and acknowledges
+// each frame before its pixels are consumed. Transport is injected at composition.
 internal sealed class DmNoteRenderBridge : IDisposable
 {
-    private readonly object sync = new object();
-    private readonly Queue<Pending> queued = new Queue<Pending>();
-    private readonly Dictionary<string, Pending> pending = new Dictionary<string, Pending>();
+    private readonly object sync = new();
+    private readonly IDmNoteMessages messages;
+    private IDisposable leaseDeadline;
+    private readonly Func<DateTime> utcNow;
+    private readonly Func<TimeSpan, Action, IDisposable> scheduleDeadline;
+    private long leaseGeneration;
+    private readonly Dictionary<string, Pending> pending = new();
+    private readonly Dictionary<string, AppReply> early = new();
+    private bool sending;
+    private AppPeer owner;
     private string applicationId;
     private JObject hello;
     private DateTime lastContact;
     private string sessionId;
     private bool disposed;
-
+    internal event Action Disconnected;
+    internal event Action AvailabilityChanged;
     private sealed class Pending
     {
-        public readonly JObject Command;
-        public readonly TaskCompletionSource<JObject> Completion = new TaskCompletionSource<JObject>(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Pending(string method, JObject parameters) => Command = new JObject { ["id"] = Guid.NewGuid().ToString("N"), ["method"] = method, ["params"] = parameters };
+        internal readonly string Outcome;
+        internal readonly TaskCompletionSource<JObject> Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Pending(string outcome) { Outcome = outcome; }
     }
-
-    public void Register(AdofaiIpcNamespace ipc)
+    internal DmNoteRenderBridge(IDmNoteMessages transport, Func<DateTime> clock, Func<TimeSpan, Action, IDisposable> scheduler)
     {
-        ipc.Register("dmnote.hello", request => Hello(request.Params as JObject));
-        ipc.Register("dmnote.poll", request => Poll(request.Params as JObject));
-        ipc.Register("dmnote.reply", request => Reply(request.Params as JObject));
+        messages = transport;
+        utcNow = clock;
+        scheduleDeadline = scheduler;
+        messages.Message += Receive;
+        messages.Disconnected += Disconnect;
     }
-
+    internal JObject Attach(AppPeer peer, JObject value)
+    {
+        string id = (string)value?["applicationId"];
+        if (string.IsNullOrWhiteSpace(id) || (int?)value?["protocolVersion"] != 2)
+            throw new DmNoteRenderException("dmnote_protocol_unsupported", "Update ImplDmNote and the renderer together to use render protocol 2.");
+        lock (sync) {
+            if (disposed) throw new ObjectDisposedException(nameof(DmNoteRenderBridge));
+            if (owner != null && !owner.Matches(peer) && sessionId != null)
+                throw new DmNoteRenderException("dmnote_busy", "Another ImplDmNote instance owns this render session.");
+            owner = peer; applicationId = id; hello = (JObject)value.DeepClone(); lastContact = utcNow();
+            ArmDeadline(TimeSpan.FromSeconds(8));
+        }
+        AvailabilityChanged?.Invoke();
+        return new JObject { ["protocolVersion"] = 2, ["leaseMs"] = 15000 };
+    }
     public object GetAvailability()
     {
         lock (sync) return new {
-            available = !disposed && hello != null && DateTime.UtcNow - lastContact < TimeSpan.FromSeconds(8),
-            protocolVersion = 1, applicationVersion = (string)hello?["applicationVersion"],
+            available = !disposed && hello != null && utcNow() - lastContact < TimeSpan.FromSeconds(8),
+            protocolVersion = 2, applicationVersion = (string)hello?["applicationVersion"],
             platform = (string)hello?["platform"], busy = sessionId != null,
             nativeCapture = (bool?)hello?["nativeCapture"] == true
         };
     }
-
-    public bool IsAvailable { get { lock (sync) return !disposed && hello != null && (bool?)hello["nativeCapture"] == true && DateTime.UtcNow - lastContact < TimeSpan.FromSeconds(8); } }
-
-    private object Hello(JObject value)
-    {
-        string id = (string)value?["applicationId"];
-        if (string.IsNullOrWhiteSpace(id) || (int?)value?["protocolVersion"] != 1)
-            throw new DmNoteRenderException("dmnote_protocol_unsupported", "This ImplDmNote version does not support renderer protocol 1. Update the app, then try again.");
-        lock (sync) {
-            if (disposed) throw new ObjectDisposedException(nameof(DmNoteRenderBridge));
-            if (applicationId != null && applicationId != id && sessionId != null)
-                throw new DmNoteRenderException("dmnote_busy", "Another ImplDmNote instance owns this render session.");
-            applicationId = id; hello = (JObject)value.DeepClone(); lastContact = DateTime.UtcNow;
-            return new { protocolVersion = 1, leaseMs = 15000 };
-        }
-    }
-
-    private void CheckOwner(JObject value)
-    {
-        if (disposed || applicationId == null || (string)value?["applicationId"] != applicationId)
-            throw new DmNoteRenderException("dmnote_disconnected", "ImplDmNote must reconnect before requesting render commands.");
-        lastContact = DateTime.UtcNow;
-    }
-
-    private object Poll(JObject value)
+    public bool IsAvailable { get { lock (sync) return !disposed && hello != null && (bool?)hello["nativeCapture"] == true && utcNow() - lastContact < TimeSpan.FromSeconds(8); } }
+    private void Receive(AppReply reply)
     {
         lock (sync) {
-            CheckOwner(value);
-            while (queued.Count > 0) {
-                Pending next = queued.Peek();
-                if (next.Completion.Task.IsCompleted) { queued.Dequeue(); continue; }
-                return new { command = next.Command.DeepClone(), active = sessionId != null };
+            if (disposed || owner == null || !owner.Matches(reply.Peer)) return;
+            if (reply.Name == "dmnote.pulse") {
+                if ((string)reply.Payload?["applicationId"] == applicationId) { lastContact = utcNow(); ArmDeadline(TimeSpan.FromSeconds(8)); }
+                return;
             }
-            return new { command = (JObject)null, active = sessionId != null };
+            if (reply.CorrelationId == null) return;
+            if (!pending.TryGetValue(reply.CorrelationId, out Pending command)) {
+                if (sending && early.Count < 8) early[reply.CorrelationId] = reply;
+                return;
+            }
+            Complete(command, reply);
         }
     }
-
-    private object Reply(JObject value)
+    private static void Complete(Pending command, AppReply reply)
     {
-        lock (sync) {
-            CheckOwner(value);
-            string id = (string)value?["id"];
-            if (id == null || !pending.TryGetValue(id, out Pending command)) return new { accepted = false };
-            pending.Remove(id);
-            if (value["error"] != null && value["error"].Type != JTokenType.Null)
-                command.Completion.TrySetException(new DmNoteRenderException((string)value["error"]["code"] ?? "dmnote_capture_failed", "ImplDmNote: " + (string)value["error"]["message"]));
-            else command.Completion.TrySetResult(value["result"] as JObject ?? new JObject());
-            return new { accepted = true };
-        }
+        if (reply.Name == "dmnote.failed") command.Completion.TrySetException(new DmNoteRenderException(
+            (string)reply.Payload?["code"] ?? "dmnote_capture_failed", "ImplDmNote: " + ((string)reply.Payload?["message"] ?? "The render command failed.")));
+        else if (reply.Name == command.Outcome && reply.Payload != null) command.Completion.TrySetResult((JObject)reply.Payload.DeepClone());
     }
-
+    private void Disconnect(AppPeer peer) => ReleaseOwner(peer, expired: false);
+    private void ArmDeadline(TimeSpan delay)
+    {
+        long generation = ++leaseGeneration;
+        leaseDeadline?.Dispose();
+        leaseDeadline = scheduleDeadline(delay, () => CheckLeaseExpiry(generation));
+    }
+    private void CancelDeadline() { leaseGeneration++; leaseDeadline?.Dispose(); leaseDeadline = null; }
+    private void CheckLeaseExpiry(long generation)
+    {
+        AppPeer peer;
+        lock (sync) {
+            if (disposed || owner == null || generation != leaseGeneration) return;
+            double remaining = 8000 - (utcNow() - lastContact).TotalMilliseconds;
+            if (remaining > 0) { ArmDeadline(TimeSpan.FromMilliseconds(Math.Max(1, remaining))); return; }
+            peer = owner;
+        }
+        ReleaseOwner(peer, expired: true, generation);
+    }
+    private void ReleaseOwner(AppPeer peer, bool expired, long expectedGeneration = 0)
+    {
+        bool active;
+        lock (sync) {
+            if (owner == null || !owner.Matches(peer)) return;
+            if (expired && (expectedGeneration != leaseGeneration || utcNow() - lastContact < TimeSpan.FromSeconds(8))) return;
+            CancelDeadline();
+            active = sessionId != null;
+            foreach (Pending command in pending.Values) command.Completion.TrySetException(new DmNoteRenderException("dmnote_disconnected", "ImplDmNote disconnected. Reopen the app before rendering again."));
+            pending.Clear(); early.Clear(); owner = null; hello = null; applicationId = null; sessionId = null;
+        }
+        AvailabilityChanged?.Invoke();
+        if (active) Disconnected?.Invoke();
+    }
     internal async Task<JObject> CommandAsync(string method, JObject parameters, CancellationToken cancellation, int timeoutMs = 30000)
     {
-        Pending command;
+        string outcome = method == "begin" ? "dmnote.begun" : method == "frame" ? "dmnote.frame.ready" : method == "end" ? "dmnote.ended" : "dmnote.reset";
+        var command = new Pending(outcome);
+        string id;
         lock (sync) {
-            if (disposed) throw new ObjectDisposedException(nameof(DmNoteRenderBridge));
-            if (hello == null || DateTime.UtcNow - lastContact > TimeSpan.FromSeconds(8))
-                throw new DmNoteRenderException("dmnote_unavailable", "Start a compatible ImplDmNote app, then render again.");
-            command = new Pending(method, parameters);
-            pending.Add((string)command.Command["id"], command); queued.Enqueue(command);
+            if (disposed || owner == null) throw new DmNoteRenderException("dmnote_disconnected", "ImplDmNote must reconnect before rendering.");
+            sending = true;
+            try {
+                id = messages.Send(owner, "dmnote." + method, parameters);
+                pending.Add(id, command);
+                if (early.TryGetValue(id, out AppReply reply)) Complete(command, reply);
+            }
+            finally { sending = false; early.Clear(); }
         }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(timeoutMs);
@@ -112,7 +145,7 @@ internal sealed class DmNoteRenderBridge : IDisposable
                 cancellation.ThrowIfCancellationRequested();
                 throw new DmNoteRenderException("dmnote_frame_timeout", "ImplDmNote did not acknowledge the render command. Check that the app is responding and try again.");
             }
-            finally { lock (sync) pending.Remove((string)command.Command["id"]); }
+            finally { lock (sync) pending.Remove(id); }
         }
     }
 
@@ -122,12 +155,13 @@ internal sealed class DmNoteRenderBridge : IDisposable
         string id;
         lock (sync) {
             if (sessionId != null) throw new DmNoteRenderException("dmnote_busy", "ImplDmNote is already rendering.");
-            if (hello == null || DateTime.UtcNow - lastContact > TimeSpan.FromSeconds(8)) throw new DmNoteRenderException("dmnote_unavailable", "Start a compatible ImplDmNote app, then render again.");
+            if (hello == null || utcNow() - lastContact > TimeSpan.FromSeconds(8)) throw new DmNoteRenderException("dmnote_unavailable", "Start a compatible ImplDmNote app, then render again.");
             if ((bool?)hello?["nativeCapture"] != true) throw new DmNoteRenderException("dmnote_capture_failed", "This ImplDmNote build cannot capture transparent render frames. Update the app, then try again.");
             if ((bool?)placement?["automaticPlacement"] == true && (bool?)hello?["multiViewerCapture"] != true)
                 throw new DmNoteRenderException("dmnote_protocol_unsupported", "Update ImplDmNote to the renderer build supporting both hand and foot overlays, then try again. This app can only render one viewer.");
             sessionId = id = Guid.NewGuid().ToString("N");
         }
+        AvailabilityChanged?.Invoke();
         try {
             var request = new JObject {
                 ["sessionId"] = id, ["width"] = width, ["height"] = height,
@@ -148,17 +182,20 @@ internal sealed class DmNoteRenderBridge : IDisposable
 
     internal async Task EndSessionAsync(string id)
     {
-        try { await CommandAsync("end", new JObject { ["sessionId"] = id }, CancellationToken.None, 5000).ConfigureAwait(false); }
-        finally { lock (sync) { if (sessionId == id) sessionId = null; } }
+        try { if (owner != null) await CommandAsync("end", new JObject { ["sessionId"] = id }, CancellationToken.None, 5000).ConfigureAwait(false); }
+        finally { lock (sync) { if (sessionId == id) sessionId = null; } AvailabilityChanged?.Invoke(); }
     }
 
     public void Dispose()
     {
+        messages.Message -= Receive;
+        messages.Disconnected -= Disconnect;
         lock (sync) {
             disposed = true;
+            CancelDeadline();
             foreach (Pending command in pending.Values) command.Completion.TrySetCanceled();
-            pending.Clear(); queued.Clear(); sessionId = null;
+            pending.Clear(); early.Clear(); sessionId = null; owner = null; hello = null;
         }
-        // The app's lease watchdog releases its input gate after IPC disappears.
+        messages.Dispose();
     }
 }

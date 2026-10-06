@@ -46,7 +46,7 @@ force autoplay. Autoplay remains available through the controller API.
 `EmbeddedRenderEngine.GetOptions()` returns codec, encoder, speed, pixel format
 and ProRes profile choices with numeric limits and defaults. `Configure` accepts
 an internally resolved FFmpeg executable and output folder. `TufFfmpegClient`
-requests TUFReplay's consent modal and polls `media.ffmpeg.status` over IPC.
+sends `media.ffmpeg.request` through an injected local-peer message adapter and waits for pushed `media.ffmpeg.state.changed` consent/install states. Read-only capability checks use the correlated `media.ffmpeg.state.read` snapshot; cancellation sends `media.ffmpeg.release`.
 The engine accepts only the verified executable inside TUFReplay's managed
 installation. `GetFfmpegStatus()` returns the cached installer state;
 `EnsureFfmpegAsync` waits for consent and installation, then runs a cancellable

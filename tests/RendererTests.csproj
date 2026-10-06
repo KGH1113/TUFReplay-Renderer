@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="*.cs" />
+    <Compile Include="../src/Jobs/RenderCancellationLease.cs" />
     <Compile Include="../src/Contracts/*.cs" />
     <Compile Include="../src/Replay/RecordedEvents.cs" />
     <Compile Include="../src/Replay/RecordingCsvReader.cs" />
@@ -21,6 +22,8 @@
     <Compile Include="../src/Media/ExternalProcess.cs" />
     <Compile Include="../src/Media/SelectedMediaFiles.cs" />
     <Compile Include="../src/Engine/TufFfmpegClient.cs" />
+    <Compile Include="../src/Ports/RecorderMessages.cs" />
+    <Compile Include="../src/Adapters/AdofaiRecorderMessages.cs" />
     <Compile Include="../src/Configuration/RenderPreferences.cs" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>

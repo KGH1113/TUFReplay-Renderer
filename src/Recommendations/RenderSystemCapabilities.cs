@@ -8,6 +8,7 @@ namespace TUFReplayRenderer.Recommendations;
 
 internal static class RenderSystemCapabilities
 {
+    internal static event Action Changed;
     private static readonly object Gate = new();
     private static CancellationTokenSource cancellation = new();
     private static string state = "checking";
@@ -63,6 +64,15 @@ internal static class RenderSystemCapabilities
             encoders = usable;
             state = nextState;
             retryAfter = DateTime.UtcNow.AddSeconds(2);
+        }
+        Changed?.Invoke();
+    }
+
+    internal static void Refresh()
+    {
+        lock (Gate) {
+            if (probe != null && !probe.IsCompleted && state == "checking") return;
+            probe = null; state = "checking"; retryAfter = DateTime.MinValue;
         }
     }
 
