@@ -71,6 +71,16 @@ public static class MediaTests
             for (int i = (int)(1.4 * 48000) * 8; i < (int)(1.8 * 48000) * 8; i += 4)
                 loudPeak = Math.Max(loudPeak, Math.Abs(BitConverter.ToSingle(loudAudio, i)));
             if (loudPeak > 1.1) throw new Exception("Loud microphone peak was not limited before encoding: " + loudPeak);
+            string verticalSource = Path.Combine(directory, "camera-vertical.mp4"), verticalOutput = Path.Combine(directory, "composed-vertical.mp4");
+            await Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=green:s=64x48:r=30:d=2,drawbox=x=0:y=0:w=64:h=24:color=red:t=fill", "-c:v", "libx264", "-pix_fmt", "yuv420p", verticalSource);
+            var flippedCamera = (JObject)webcam.DeepClone();
+            flippedCamera["flipVertical"] = true;
+            flippedCamera["crop"] = JObject.FromObject(new { left = 0d, top = 0d, right = 1d, bottom = 1d });
+            var verticalPlan = MediaCompositionPlan.Create(game, verticalOutput, 320, 180, 30, 4_000_000, timeline, flippedCamera, verticalSource, null, null);
+            await ExternalProcess.Run("ffmpeg", verticalPlan.Arguments.ToArray(), CancellationToken.None);
+            byte[] flippedFrame = await Frame(verticalOutput, 1.8);
+            Green(flippedFrame, 190, 60, "vertically flipped camera top");
+            Red(flippedFrame, 190, 115, "vertically flipped camera bottom");
             await TestSelectedCodecs(directory, camera);
             await TestOptionalAudio(directory, game, microphone, timeline, mic);
             await TestHandFootComposition(directory, game);

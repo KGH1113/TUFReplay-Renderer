@@ -158,7 +158,7 @@ public sealed class MediaCompositionPlan
             + N((visibleBottom - visibleTop) / fullHeight) + "):iw*" + N((visibleLeft - originalX) / fullWidth)
             + ":ih*" + N((visibleTop - originalY) / fullHeight);
         return "crop=iw*" + N(right - left) + ":ih*" + N(bottom - top) + ":iw*" + N(left) + ":ih*" + N(top)
-            + (((bool?)camera["mirror"] ?? false) ? ",hflip" : "") + "," + viewport + ",scale=" + w + ":" + h;
+            + (((bool?)camera["mirror"] ?? false) ? ",hflip" : "") + (((bool?)camera["flipVertical"] ?? false) ? ",vflip" : "") + "," + viewport + ",scale=" + w + ":" + h;
     }
 
     private static double Unit(JObject obj, string key, double fallback)
