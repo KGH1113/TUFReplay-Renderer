@@ -8,6 +8,7 @@ RENDERER_ARTIFACTS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$RENDERER_ARTIFACTS_LIB_DIR/context.sh"
 # shellcheck source=guards.sh
 source "$RENDERER_ARTIFACTS_LIB_DIR/guards.sh"
+source "$RENDERER_ARTIFACTS_LIB_DIR/ipc-bundle.sh"
 
 RENDERER_PAYLOAD_FILES=(
   Info.json LICENSE.md COPYING LICENSE-EXCEPTION THIRD-PARTY-NOTICES.md
@@ -16,6 +17,7 @@ RENDERER_PAYLOAD_FILES=(
 
 validate_renderer_payload() {
   require_file "$RENDERER_BUILD_OUTPUT/TUFReplay-Renderer.dll"
+  verify_ipc_bundle
   local file platform
   for file in "${RENDERER_PAYLOAD_FILES[@]}"; do
     require_file "$RENDERER_PROJECT_ROOT/$file"
@@ -39,6 +41,7 @@ copy_renderer_payload() {
   done
   cp "$RENDERER_BUILD_OUTPUT/TUFReplay-Renderer.dll" "$destination/TUFReplay-Renderer.dll.pending"
   mv -f "$destination/TUFReplay-Renderer.dll.pending" "$destination/TUFReplay-Renderer.dll"
+  copy_ipc_bundle "$destination"
   cp -R "$RENDERER_PROJECT_ROOT/Assets" "$destination/"
   cp -R "$RENDERER_PROJECT_ROOT/docs" "$destination/"
   cp "$RENDERER_PROJECT_ROOT/TUFReplay-Renderer.Unity/Assets/TextMesh Pro/Fonts/LiberationSans - OFL.txt" "$destination/LIBERATION-SANS-OFL.txt"

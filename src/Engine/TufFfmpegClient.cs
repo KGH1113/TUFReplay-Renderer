@@ -39,7 +39,7 @@ internal static class TufFfmpegClient
     internal static async Task<EngineFfmpegStatus> EnsureAsync(CancellationToken cancellation)
     {
         if (messages == null || root == null)
-            throw new RenderOperationException("ffmpeg_owner_unavailable", "Enable the latest TUFReplay and AdofaiIpc mods, then try rendering again.");
+            throw new RenderOperationException("ffmpeg_owner_unavailable", "Install the latest TUFReplay and Renderer packages, restart the game, then try rendering again.");
         try {
             JObject state = await WaitForStateAsync("media.ffmpeg.request", true, cancellation).ConfigureAwait(false);
             string phase = (string)state["Status"];

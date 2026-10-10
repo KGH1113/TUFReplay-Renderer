@@ -10,5 +10,6 @@ for assembly in Assembly-CSharp.dll UnityEngine.CoreModule.dll Unity.TextMeshPro
 done
 require_file "$UNITY_MOD_MANAGER_DLL"
 require_file "$HARMONY_DLL"
-require_file "$ADOFAI_IPC_DLL"
+source "$TASK_DIR/../../lib/ipc-bundle.sh"
+verify_ipc_bundle
 require_file "$RENDERER_PROJECT_ROOT/src/TUFReplay-Renderer.csproj"

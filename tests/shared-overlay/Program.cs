@@ -19,7 +19,7 @@ internal static class Program
     {
         OverlayDiscoveryTests.Run();
         OverlayMethodDiscoveryTests.Run();
-        foreach (string name in new[] { "TUFReplay", "AdofaiIpc", "UnityModManager", "Unity.TextMeshPro", "DOTween" })
+        foreach (string name in new[] { "TUFReplay", "AdofaiIpc", "AdofaiIpc.Contracts", "AdofaiIpc.Loader", "AdofaiIpc.Runtime", "UnityModManager", "Unity.TextMeshPro", "DOTween" })
             Check(!OverlayRuntimeScope.AllowsAssembly(name), "Host/framework assembly must retain real time: " + name);
         foreach (string name in new[] { "TUFReplay Canvas", "UnityModManager", "CameraSetupCanvas", "ReplayTimelineCanvas" })
             Check(OverlayRuntimeScope.IsControlName(name), "Control UI must be excluded from capture and virtualization: " + name);

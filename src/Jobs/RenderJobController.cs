@@ -5,7 +5,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using AdofaiIpc;
+using TUFReplayRenderer.Ipc;
 using Newtonsoft.Json.Linq;
 using OrbitRender;
 using OrbitRender.Renderer;
@@ -126,11 +126,11 @@ public sealed class RenderJobController : MonoBehaviour
     {
         var job = Find(jobId);
         if (job == null || job.State != "completed" || !File.Exists(job.Output))
-            return new IpcDownloadError("render_not_ready", "The rendered video is not ready.", 404);
+            return new DownloadFailure("render_not_ready", "The rendered video is not ready.", 404);
         string path = job.Output;
         long length = new FileInfo(path).Length;
         string extension = Path.GetExtension(path).ToLowerInvariant();
-        return new IpcDownloadSource(stream => {
+        return new DownloadSource(stream => {
             using var file = File.OpenRead(path);
             file.CopyTo(stream, 128 * 1024);
         }, length, Path.GetFileName(path), extension == ".webm" ? "video/webm" : extension == ".mov" ? "video/quicktime" : "video/mp4");

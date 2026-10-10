@@ -14,7 +14,7 @@
     <ModManagerDir Condition="'$(ModManagerDir)' == ''">$(AdofaiManaged)/UnityModManager</ModManagerDir>
     <UnityModManagerDll Condition="'$(UnityModManagerDll)' == ''">$(ModManagerDir)/UnityModManager.dll</UnityModManagerDll>
     <HarmonyDll Condition="'$(HarmonyDll)' == ''">$(ModManagerDir)/0Harmony.dll</HarmonyDll>
-    <AdofaiIpcDll Condition="'$(AdofaiIpcDll)' == ''">$(GameDir)/Mods/AdofaiIpc/AdofaiIpc.dll</AdofaiIpcDll>
+    <AdofaiIpcBundle Condition="'$(AdofaiIpcBundle)' == ''">$(MSBuildThisFileDirectory)../vendor/adofai-ipc-runtime</AdofaiIpcBundle>
   </PropertyGroup>
   <ItemGroup>
     <!-- Keep historical adapter sources available to their lifecycle fixtures,
@@ -31,7 +31,8 @@
     <Reference Include="$(AdofaiManaged)/Newtonsoft.Json.dll"><Private>false</Private></Reference>
     <Reference Include="$(UnityModManagerDll)"><Private>false</Private></Reference>
     <Reference Include="$(HarmonyDll)"><Private>false</Private></Reference>
-    <Reference Include="AdofaiIpc"><HintPath>$(AdofaiIpcDll)</HintPath><Private>false</Private></Reference>
+    <Reference Include="AdofaiIpc.Contracts"><HintPath>$(AdofaiIpcBundle)/AdofaiIpc.Contracts.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AdofaiIpc.Loader"><HintPath>$(AdofaiIpcBundle)/AdofaiIpc.Loader.dll</HintPath><Private>false</Private></Reference>
     <EmbeddedResource Include="Engine/Localization/*.ftl" />
   </ItemGroup>
 </Project>

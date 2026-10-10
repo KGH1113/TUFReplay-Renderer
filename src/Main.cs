@@ -1,5 +1,5 @@
 using System;
-using AdofaiIpc;
+using TUFReplayRenderer.Ipc;
 using Newtonsoft.Json.Linq;
 using TUFReplayRenderer.Jobs;
 using TUFReplayRenderer.Adapters;
@@ -23,7 +23,7 @@ public static class Main
     internal static DmNoteRenderBridge DmNote;
     internal static RenderProgressView ProgressUi;
     private static OutputDirectoryService folders;
-    private static AdofaiIpcNamespace messages;
+    private static JsonFeature messages;
 
     public static bool Load(UnityModManager.ModEntry entry)
     {
@@ -39,6 +39,7 @@ public static class Main
         if (host != null) return true;
         try
         {
+            IpcRuntime.Connect(entry.Path);
             Settings = RendererSettings.Load(entry.Path);
             TufFfmpegClient.Initialize(UnityModManager.FindMod("TUFReplay")?.Path, new AdofaiRecorderMessages());
             TufFfmpegClient.Available += OnFfmpegAvailable;
@@ -54,14 +55,14 @@ public static class Main
             string platform = Application.platform == RuntimePlatform.OSXPlayer || Application.platform == RuntimePlatform.OSXEditor ? "mac"
                 : Application.platform == RuntimePlatform.WindowsPlayer || Application.platform == RuntimePlatform.WindowsEditor ? "win" : "linux";
             folders = new OutputDirectoryService(platform);
-            var ipc = AdofaiIpc.AdofaiIpc.RegisterNamespace(Namespace, new IpcNamespaceInfo {
-                DisplayName = "TUFReplay-Renderer", Version = Version,
-                AllowedOrigins = new[] { "https://tuforums.com", "https://tufreplay.impl1113.dev",
+            var ipc = JsonFeature.Register(new AdofaiIpc.Contracts.FeatureDescription(
+                Namespace, Version, protocolMajor: 2, displayName: "TUFReplay-Renderer",
+                allowedOrigins: new[] { "https://tuforums.com", "https://tufreplay.impl1113.dev",
                     "https://tufreplay-dev.impl1113.dev", "https://tufreplay-auto.impl1113.dev",
                     // Temporary Tailscale test origins.
                     "https://guhyeons-macbook-pro.tail234c02.ts.net", "http://guhyeons-macbook-pro.tail234c02.ts.net",
                     "http://localhost", "http://127.0.0.1" }
-            });
+            ), ipc => {
             messages = ipc;
             var appMessages = new AdofaiDmNoteMessages(ipc);
             DmNote = new DmNoteRenderBridge(appMessages, () => DateTime.UtcNow, ThreadPoolDeadlines.Schedule);
@@ -84,12 +85,13 @@ public static class Main
             Register(ipc, "render.state.read", "renderer.job.changed", command => Jobs.Status(RequiredId(command)), true);
             Register(ipc, "render.cancel", "renderer.job.changed", command => Jobs.Cancel(RequiredId(command)), true);
             ipc.RegisterDownloadCommand("render.download", command => Jobs.Download(RequiredId(command)));
-            ipc.PeerSubscribed += peer => AdofaiIpc.AdofaiIpc.RunOnMainThread(() => {
+            ipc.PeerSubscribed += peer => IpcRuntime.Current.RunOnGameThread(() => {
                 if (messages != ipc || Jobs == null) return;
                 ipc.SendToPeer(peer.PeerId, "renderer.health.snapshot", GetHealth());
                 ipc.SendToPeer(peer.PeerId, "renderer.settings.changed", GetConfiguration());
                 ipc.SendToPeer(peer.PeerId, "dmnote.availability.changed", DmNote.GetAvailability());
                 foreach (object state in Jobs.Snapshots()) ipc.SendToPeer(peer.PeerId, "renderer.job.changed", state);
+            });
             });
             ipc.MarkReady();
             entry.Logger.Log("Independent renderer IPC ready.");
@@ -98,21 +100,21 @@ public static class Main
         catch (Exception exception) { entry.Logger.Error(exception.ToString()); Stop(); return false; }
     }
 
-    private static string RequiredId(IpcCommand command) => (string)command.Payload?["jobId"];
+    private static string RequiredId(JsonCommand command) => (string)command.Payload?["jobId"];
     private static object GetHealth() => new {
         available = true, version = Version, schemaVersion = 1, busy = Jobs.Busy,
         dmNoteConfigured = DmNote.IsAvailable, dmNote = DmNote.GetAvailability(),
         engineAvailable = EmbeddedRenderEngine.Available, orbitAvailable = EmbeddedRenderEngine.Available,
         ffmpeg = FfmpegSnapshot(), overlayCapabilities = Replay.OptionalModCapabilities.Inspect()
     };
-    private static void OnFfmpegAvailable() => AdofaiIpc.AdofaiIpc.RunOnMainThread(() => {
+    private static void OnFfmpegAvailable() => IpcRuntime.Current.RunOnGameThread(() => {
         if (messages == null) return;
         Recommendations.RenderSystemCapabilities.Refresh();
         OnConfigurationChanged();
     });
     private static void OnJobChanged(object state) => messages?.Publish("renderer.job.changed", state);
     private static void OnFolderChanged(object state) => messages?.Publish("renderer.folder-selection.changed", state);
-    private static void OnConfigurationChanged() => AdofaiIpc.AdofaiIpc.RunOnMainThread(() => {
+    private static void OnConfigurationChanged() => IpcRuntime.Current.RunOnGameThread(() => {
         if (messages != null && Settings != null) messages.Publish("renderer.settings.changed", GetConfiguration());
     });
     private static void OnDmNoteAvailability() => messages?.Publish("dmnote.availability.changed", DmNote.GetAvailability());
@@ -121,11 +123,11 @@ public static class Main
         RenderJobController controller = Jobs;
         string jobId = controller?.CurrentJobId;
         var lease = new RenderCancellationLease(controller, jobId, DmNote);
-        AdofaiIpc.AdofaiIpc.RunOnMainThread(() => lease.Apply(Jobs, Jobs?.CurrentJobId, DmNote, () => controller.Cancel(jobId)));
+        IpcRuntime.Current.RunOnGameThread(() => lease.Apply(Jobs, Jobs?.CurrentJobId, DmNote, () => controller.Cancel(jobId)));
     }
-    private static void Register(AdofaiIpcNamespace ipc, string name, string outcome, Func<IpcCommand, object> action, bool mainThread = false, bool broadcast = false)
+    private static void Register(JsonFeature ipc, string name, string outcome, Func<JsonCommand, object> action, bool mainThread = false, bool broadcast = false)
     {
-        Action<IpcCommand> handler = command => {
+        Action<JsonCommand> handler = command => {
             try {
                 object result = action(command);
                 JObject payload = JObject.FromObject(result);
@@ -182,6 +184,7 @@ public static class Main
     private static bool Unload(UnityModManager.ModEntry entry) { Stop(); return true; }
     private static void Stop()
     {
+        JsonFeature registration = messages;
         messages = null;
         Recommendations.RenderSystemCapabilities.Changed -= OnConfigurationChanged;
         Recommendations.RenderSystemCapabilities.Shutdown();
@@ -192,7 +195,7 @@ public static class Main
         finally { Replay.OptionalModClock.Shutdown(); }
         folders?.Dispose(); folders = null;
         DmNote?.Dispose(); DmNote = null;
-        AdofaiIpc.AdofaiIpc.UnregisterNamespace(Namespace);
+        registration?.Dispose();
         EmbeddedRenderEngine.Shutdown();
         TufFfmpegClient.Available -= OnFfmpegAvailable;
         TufFfmpegClient.Shutdown();

@@ -1,5 +1,7 @@
 using System;
-using AdofaiIpc;
+using AdofaiIpc.Contracts;
+using TUFReplayRenderer.Ipc;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using TUFReplayRenderer.Ports;
 
@@ -11,22 +13,22 @@ internal sealed partial class AdofaiRecorderMessages
 
     private sealed class AdofaiRecorderPeer : IRecorderPeer
     {
-        private readonly IpcLocalPeer peer;
+        private readonly ILocalPeer peer;
         public bool IsClosed => peer.IsClosed;
         public event Action<RecorderMessage> Message;
 
         internal AdofaiRecorderPeer()
         {
-            peer = AdofaiIpc.AdofaiIpc.CreateLocalPeer("tuf-replay-renderer-ffmpeg");
+            peer = IpcRuntime.Current.CreateLocalPeer("tuf-replay-renderer-ffmpeg");
             peer.Message += Receive;
         }
 
         public void Subscribe() => peer.Subscribe("tuf-replay");
-        public string Send(string command) => peer.SendCommand("tuf-replay", command, new JObject());
-        private void Receive(IpcPeerMessage value)
+        public string Send(string command) => peer.SendCommand("tuf-replay", command, "{}");
+        private void Receive(LocalMessage value)
         {
             if (value.Namespace == "tuf-replay")
-                Message?.Invoke(new RecorderMessage(value.Name, value.CorrelationId, value.Payload as JObject));
+                Message?.Invoke(new RecorderMessage(value.Name, value.CorrelationId, JsonConvert.DeserializeObject<JObject>(value.Json)));
         }
 
         public void Dispose() { peer.Message -= Receive; peer.Dispose(); }

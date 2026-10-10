@@ -8,6 +8,7 @@ internal static class OverlayRuntimeScope
     internal static bool AllowsAssembly(string name) => !string.IsNullOrEmpty(name)
         && !name.Equals("TUFReplay", StringComparison.OrdinalIgnoreCase)
         && !name.Equals("AdofaiIpc", StringComparison.OrdinalIgnoreCase)
+        && !name.StartsWith("AdofaiIpc.", StringComparison.OrdinalIgnoreCase)
         && !name.StartsWith("Unity", StringComparison.OrdinalIgnoreCase)
         && !name.Equals("DOTween", StringComparison.OrdinalIgnoreCase);
 
